@@ -1,0 +1,19 @@
+[project]
+name = "bogeyboard"
+version = "0.1.0"
+description = "Garmin golf data scraper + dashboard"
+requires-python = ">=3.12"
+dependencies = [
+    "garminconnect>=0.3.11",
+    "polars>=1.0",
+]
+
+[project.scripts]
+bogeyboard-fetch = "bogeyboard.fetch_garmin:main"
+
+[build-system]
+requires = ["uv_build>=0.8,<1.0"]
+build-backend = "uv_build"
+
+[tool.uv.build-backend]
+module-name = "bogeyboard"
