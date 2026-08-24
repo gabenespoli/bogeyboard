@@ -209,6 +209,133 @@ def avg_score_by(expr: pl.Expr, order: list) -> pl.DataFrame:
     )
 
 
+def shot_distances(
+    club_names: list[str],
+    round_ids: list[int] | None = None,
+    trim_std: float | str | None = None,
+    trim_std_high: float | str | None = None,
+) -> pl.DataFrame:
+    shots = load_shots().filter(
+        pl.col("club").is_not_null()
+        & pl.col("distance_m").is_not_null()
+        & (pl.col("shot_type") != "PUTT")
+        & pl.col("club").is_in(club_names)
+    )
+    if round_ids is not None:
+        shots = (
+            shots.filter(pl.col("round_id").is_in(round_ids))
+            if round_ids
+            else shots.clear()
+        )
+    shots = shots.select(
+        "round_id",
+        "club",
+        (pl.col("distance_m") / 0.9144).alias("distance_yds"),
+    )
+    trims = {
+        "low": trim_std if isinstance(trim_std, (int, float)) and trim_std else None,
+        "high": trim_std_high
+        if isinstance(trim_std_high, (int, float)) and trim_std_high
+        else None,
+    }
+    if (trims["low"] is not None or trims["high"] is not None) and shots.height:
+        shots = (
+            shots.with_columns(
+                pl.col("distance_yds").mean().over("club").alias("_mean"),
+                pl.col("distance_yds").std().over("club").alias("_std"),
+            )
+            .with_columns(
+                (pl.col("distance_yds") - pl.col("_mean")).alias("_dev")
+            )
+            .filter(
+                (trims["low"] is None)
+                | (-pl.col("_dev") <= trims["low"] * pl.col("_std"))
+            )
+            .filter(
+                (trims["high"] is None)
+                | (pl.col("_dev") <= trims["high"] * pl.col("_std"))
+            )
+            .drop("_mean", "_std", "_dev")
+        )
+    return shots
+
+
+def shot_density(
+    club_names: list[str],
+    round_ids: list[int] | None = None,
+    trim_std: float | str | None = None,
+    trim_std_high: float | str | None = None,
+    points: int = 120,
+) -> tuple[pl.DataFrame, pl.DataFrame]:
+    """Gaussian KDE curves per club plus per-club means, ready for plotting."""
+    shots = shot_distances(club_names, round_ids, trim_std=trim_std, trim_std_high=trim_std_high)
+    means = shots.group_by("club").agg(
+        pl.col("distance_yds").mean().round(1).alias("mean_yds")
+    )
+    if shots.height == 0:
+        empty = pl.DataFrame(
+            {"distance": [], "density": [], "club": []},
+            schema={"distance": pl.Float64, "density": pl.Float64, "club": pl.String},
+        )
+        return empty, means
+
+    frames = []
+    for key, g in shots.group_by("club"):
+        club = key[0] if isinstance(key, (tuple, list)) else key
+        v = g["distance_yds"]
+        n = v.len()
+        sd = v.std() or 0.0
+        iqr = v.quantile(0.75) - v.quantile(0.25)
+        bandwidth = 0.9 * min(sd, iqr / 1.34) * n ** -0.2 if sd > 0 else 1.0
+        lo, hi = v.min() - bandwidth * 2, v.max() + bandwidth * 2
+        step = (hi - lo) / points
+        grid = pl.DataFrame({"distance": [lo + step * i for i in range(points)]})
+        curves_club = (
+            grid.join(g.select("distance_yds"), how="cross")
+            .with_columns(
+                (
+                    (pl.col("distance") - pl.col("distance_yds")) / bandwidth
+                )
+                .pow(2)
+                .alias("_z2")
+            )
+            .group_by("distance")
+            .agg((-0.5 * pl.col("_z2")).exp().sum().alias("density"))
+            .with_columns(
+                (pl.col("density") / (n * bandwidth)).alias("density"),
+                pl.lit(club).alias("club"),
+            )
+            .select("distance", "density", "club")
+            .sort("distance")
+        )
+        frames.append(curves_club)
+
+    curves = pl.concat(frames)
+    top = curves["density"].max()
+    means = means.with_columns(pl.lit(top * 0.97).alias("label_y"))
+    return curves, means
+
+
+def available_clubs(round_ids: list[int] | None = None) -> list[str]:
+    shots = load_shots().filter(
+        pl.col("club").is_not_null()
+        & pl.col("distance_m").is_not_null()
+        & (pl.col("shot_type") != "PUTT")
+    )
+    if round_ids is not None:
+        shots = (
+            shots.filter(pl.col("round_id").is_in(round_ids))
+            if round_ids
+            else shots.clear()
+        )
+    return (
+        shots.group_by("club")
+        .agg(pl.col("distance_m").mean().alias("_avg"))
+        .sort("_avg", descending=True)["club"]
+        .to_list()
+    )
+
+
 def club_distances(round_ids: list[int] | None = None) -> pl.DataFrame:
     shots = load_shots().filter(
         pl.col("club").is_not_null()
