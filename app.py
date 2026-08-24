@@ -36,10 +36,18 @@ def pick_rounds(key: str) -> list[int]:
 
 st.title("Bogeyboard")
 
+sources = st.pills(
+    "Source",
+    ["all", "garmin", "grint"],
+    selection_mode="single",
+    default="all",
+)
+
 tab_rounds, tab_holes, tab_shots = st.tabs(["Rounds", "Holes", "Shots"])
 
 with tab_rounds:
-    st.dataframe(rounds, hide_index=True)
+    df = rounds if sources == "all" else rounds.filter(pl.col("source") == sources)
+    st.dataframe(df, hide_index=True)
 
 with tab_holes:
     picked = pick_rounds("hole_filter")

@@ -28,6 +28,7 @@ TOKEN_STORE = Path("~/.garminconnect").expanduser()
 
 ROUNDS_SCHEMA = {
     "round_id": pl.UInt64,
+    "source": pl.String,
     "date": pl.String,
     "course_name": pl.String,
     "score": pl.Int64,
@@ -41,11 +42,13 @@ ROUNDS_SCHEMA = {
 
 HOLES_SCHEMA = {
     "round_id": pl.UInt64,
+    "source": pl.String,
     "hole_number": pl.UInt8,
     "par": pl.UInt8,
     "score": pl.Int64,
     "putts": pl.UInt8,
     "penalties": pl.UInt8,
+    "fairway": pl.String,
 }
 
 SHOTS_SCHEMA = {
@@ -111,6 +114,7 @@ def parse_round_summary(item: dict) -> dict | None:
     strokes = item.get("strokes")
     return {
         "round_id": int(round_id),
+        "source": "garmin",
         "date": str(item.get("startTime") or "")[:10],
         "course_name": str(item.get("courseName") or ""),
         "score": int(strokes) if strokes is not None else None,
@@ -146,11 +150,13 @@ def parse_holes(detail: dict, round_id: int, pars_by_hole: dict[int, int]) -> li
         rows.append(
             {
                 "round_id": round_id,
+                "source": "garmin",
                 "hole_number": int(num),
                 "par": pars_by_hole.get(int(num)),
                 "score": h.get("strokes"),
                 "putts": h.get("putts"),
                 "penalties": h.get("penalties"),
+                "fairway": None,
             }
         )
     return rows
