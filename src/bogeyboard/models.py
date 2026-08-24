@@ -7,10 +7,10 @@ ROUNDS_SCHEMA = {
     "score": pl.Int64,
     "to_par": pl.Int64,
     "holes_played": pl.UInt8,
-    "putts": pl.UInt8,
-    "fairways_hit": pl.UInt8,
-    "fairways_possible": pl.UInt8,
-    "gir_count": pl.UInt8,
+    "tee_box": pl.String,
+    "slope": pl.Float64,
+    "rating": pl.Float64,
+    "walk_distance_m": pl.Float64,
 }
 
 HOLES_SCHEMA = {
@@ -19,8 +19,6 @@ HOLES_SCHEMA = {
     "par": pl.UInt8,
     "score": pl.Int64,
     "putts": pl.UInt8,
-    "fairway": pl.String,
-    "gir": pl.Boolean,
     "penalties": pl.UInt8,
 }
 
@@ -31,12 +29,11 @@ SHOTS_SCHEMA = {
     "club": pl.String,
     "is_club_tagged": pl.Boolean,
     "shot_type": pl.String,
+    "shot_source": pl.String,
     "lie": pl.String,
+    "start_lat": pl.Float64,
+    "start_lon": pl.Float64,
     "lat": pl.Float64,
     "lon": pl.Float64,
     "distance_m": pl.Float64,
 }
-
-
-def empty_df(schema: dict) -> pl.DataFrame:
-    return pl.DataFrame(schema=schema)

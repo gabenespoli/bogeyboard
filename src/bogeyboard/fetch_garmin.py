@@ -23,140 +23,96 @@ RAW_DIR = DATA_DIR / "raw"
 FETCH_DELAY_S = 1.0
 
 
-def _first(d, *keys):
-    for k in keys:
-        v = d.get(k) if isinstance(d, dict) else None
-        if v is not None:
-            return v
-    return None
-
-
 def _coord(v):
-    """Garmin sometimes returns coords scaled by 1e7."""
-    if v is None:
-        return None
-    v = float(v)
-    return v / 1e7 if abs(v) > 180 else v
-
-
-def _to_par(score, par):
-    if score is None or par is None:
-        return None
-    return int(score) - int(par)
+    """Garmin returns coords scaled by 1e7."""
+    return float(v) / 1e7 if v is not None else None
 
 
 def parse_round_summary(item: dict) -> dict | None:
-    round_id = _first(item, "id", "scorecardId")
+    round_id = item.get("id")
     if round_id is None:
         return None
-    date = str(_first(item, "date", "startTimeLocal", "startTimeUtc") or "")[:10]
-    course = str(_first(item, "courseName", "course", "name") or "")
-    score = _first(item, "score", "totalStrokes")
-    par = _first(item, "par", "coursePar")
-    holes_played = _first(item, "holesPlayed", "holeCount")
+    hole_pars = str(item.get("holePars") or "")
+    par_total = sum(int(c) for c in hole_pars if c.isdigit())
+    strokes = item.get("strokes")
     return {
         "round_id": int(round_id),
-        "date": date,
-        "course_name": course,
-        "score": int(score) if score is not None else None,
-        "to_par": _to_par(score, par),
-        "holes_played": int(holes_played) if holes_played is not None else None,
-        "putts": _first(item, "putts", "totalPutts"),
-        "fairways_hit": _first(item, "fairwaysHit"),
-        "fairways_possible": _first(item, "fairwayOpportunities"),
-        "gir_count": _first(item, "girCount"),
+        "date": str(item.get("startTime") or "")[:10],
+        "course_name": str(item.get("courseName") or ""),
+        "score": int(strokes) if strokes is not None else None,
+        "to_par": int(strokes) - par_total if strokes is not None and par_total else None,
+        "holes_played": item.get("holesCompleted"),
+        "tee_box": "",
+        "slope": None,
+        "rating": None,
+        "walk_distance_m": None,
     }
 
 
-def parse_holes(detail: dict, round_id: int) -> list[dict]:
-    holes = _first(detail, "holes", "golfHoles") or []
+def parse_round_detail(detail: dict, rnd: dict) -> dict:
+    """Enrich a parsed summary with tee/slope/walk data from the scorecard detail."""
+    cards = detail.get("scorecardDetails") or []
+    sc = cards[0].get("scorecard", {}) if cards else {}
+    rnd["tee_box"] = str(sc.get("teeBox") or "")
+    rnd["slope"] = sc.get("teeBoxSlope")
+    rnd["rating"] = sc.get("teeBoxRating")
+    walked = sc.get("distanceWalked")
+    rnd["walk_distance_m"] = float(walked) if walked else None
+    return rnd
+
+
+def parse_holes(detail: dict, round_id: int, pars_by_hole: dict[int, int]) -> list[dict]:
+    cards = detail.get("scorecardDetails") or []
+    holes = cards[0].get("scorecard", {}).get("holes", []) if cards else []
     rows = []
     for h in holes:
-        num = _first(h, "holeNumber", "number", "holeId")
+        num = h.get("number")
         if num is None:
             continue
         rows.append(
             {
                 "round_id": round_id,
                 "hole_number": int(num),
-                "par": _first(h, "par"),
-                "score": _first(h, "score", "strokes"),
-                "putts": _first(h, "putts"),
-                "fairway": _first(h, "fairwayMarking", "fairway"),
-                "gir": _first(h, "gir", "greenInRegulation"),
-                "penalties": _first(h, "penaltyCount", "penalties"),
+                "par": pars_by_hole.get(int(num)),
+                "score": h.get("strokes"),
+                "putts": h.get("putts"),
+                "penalties": h.get("penalties"),
             }
         )
     return rows
 
 
 def parse_shots(shot_data: dict, round_id: int) -> list[dict]:
-    """Shot payloads vary by device/firmware; extract defensively and keep raw JSON on disk."""
+    clubs = {
+        c["id"]: c.get("name")
+        for c in shot_data.get("clubDetails") or []
+        if c.get("id")
+    }
     rows = []
-
-    def walk(obj, current_hole=None):
-        if isinstance(obj, list):
-            for x in obj:
-                walk(x, current_hole)
-            return
-        if not isinstance(obj, dict):
-            return
-
-        hole = _first(obj, "holeNumber", "number") or current_hole
-        shots = _first(obj, "shots", "shotList")
-        if shots is not None:
-            walk(shots, hole)
-            return
-
-        seq = _first(obj, "shotSequenceNumber", "sequenceNumber", "shotNumber")
-        if seq is None:
-            for v in obj.values():
-                walk(v, hole)
-            return
-
-        club_obj = obj.get("clubType") or {}
-        club = (
-            club_obj.get("value") or club_obj.get("clubName")
-            if isinstance(club_obj, dict)
-            else club_obj
-        )
-        pos = _first(obj, "endPosition", "position", "location") or {}
-        start_pos = _first(obj, "startPosition") or {}
-        dist = _first(
-            obj,
-            "distanceMeters",
-            "shotDistanceMeters",
-            "distance",
-            "meters",
-        )
-        if dist is None and pos.get("latitude") and start_pos.get("latitude"):
-            from math import asin, cos, radians, sin, sqrt
-
-            lat1, lon1 = _coord(start_pos["latitude"]), _coord(start_pos["longitude"])
-            lat2, lon2 = _coord(pos["latitude"]), _coord(pos["longitude"])
-            dlat, dlon = radians(lat2 - lat1), radians(lon2 - lon1)
-            a = (
-                sin(dlat / 2) ** 2
-                + cos(radians(lat1)) * cos(radians(lat2)) * sin(dlon / 2) ** 2
+    for hole in shot_data.get("holeShots") or []:
+        hole_number = hole.get("holeNumber")
+        for s in hole.get("shots") or []:
+            club_id = s.get("clubId")
+            start_loc = s.get("startLoc") or {}
+            end_loc = s.get("endLoc") or {}
+            dist = s.get("meters")
+            rows.append(
+                {
+                    "round_id": round_id,
+                    "hole_number": int(hole_number) if hole_number is not None else None,
+                    "shot_number": s.get("shotOrder"),
+                    "club": clubs.get(club_id),
+                    "is_club_tagged": bool(club_id),
+                    "shot_type": s.get("shotType"),
+                    "shot_source": s.get("shotSource"),
+                    "lie": end_loc.get("lie"),
+                    "start_lat": _coord(start_loc.get("lat")),
+                    "start_lon": _coord(start_loc.get("lon")),
+                    "lat": _coord(end_loc.get("lat")),
+                    "lon": _coord(end_loc.get("lon")),
+                    "distance_m": float(dist) if dist is not None else None,
+                }
             )
-            dist = 2 * 6_371_000 * asin(sqrt(a))
-
-        rows.append(
-            {
-                "round_id": round_id,
-                "hole_number": int(hole) if hole is not None else None,
-                "shot_number": int(seq),
-                "club": str(club) if club else None,
-                "is_club_tagged": bool(club),
-                "shot_type": _first(obj, "shotType", "type"),
-                "lie": _first(obj, "lieType", "lie"),
-                "lat": _coord(pos.get("latitude")),
-                "lon": _coord(pos.get("longitude")),
-                "distance_m": float(dist) if dist is not None else None,
-            }
-        )
-
-    walk(shot_data)
     return rows
 
 
@@ -176,27 +132,35 @@ def fetch_all(full: bool, since: str | None) -> None:
     print("Fetching round summaries...")
     summaries = []
     start = 0
-    while True:
+    total_rows = None
+    while total_rows is None or len(summaries) < total_rows:
         batch = client.get_golf_summary(start=start, limit=100)
-        if not batch:
+        items = batch.get("scorecardSummaries") or [] if isinstance(batch, dict) else batch
+        total_rows = batch.get("totalRows", len(summaries)) if isinstance(batch, dict) else None
+        summaries.extend(items)
+        if not items:
             break
-        summaries.extend(batch)
-        if len(batch) < 100:
-            break
-        start += 100
+        start += len(items)
 
-    parsed = [r for s in summaries if (r := parse_round_summary(s))]
+    parsed = []
+    pars_by_round = {}
+    for s in summaries:
+        if r := parse_round_summary(s):
+            parsed.append(r)
+            pars_by_round[r["round_id"]] = {
+                n + 1: int(c) for n, c in enumerate(str(s.get("holePars") or "")) if c.isdigit()
+            }
     if since:
         parsed = [r for r in parsed if r["date"] >= since]
     new_rounds = [r for r in parsed if r["round_id"] not in existing_ids]
     new_rounds.sort(key=lambda r: r["date"])
     print(f"{len(parsed)} total rounds found, {len(new_rounds)} new to fetch")
 
-    holes_df = empty(HOLES_SCHEMA) if full else load_or_empty("holes.parquet", HOLES_SCHEMA)
-    shots_df = empty(SHOTS_SCHEMA) if full else load_or_empty("shots.parquet", SHOTS_SCHEMA)
+    holes_df = load_or_empty("holes.parquet", HOLES_SCHEMA)
+    shots_df = load_or_empty("shots.parquet", SHOTS_SCHEMA)
     if full:
-        holes_df = holes_df.filter(pl.lit(False))
-        shots_df = shots_df.filter(pl.lit(False))
+        holes_df = holes_df.clear()
+        shots_df = shots_df.clear()
 
     failures = []
     for i, rnd in enumerate(new_rounds, 1):
@@ -204,6 +168,7 @@ def fetch_all(full: bool, since: str | None) -> None:
         label = f"{rnd['date']} {rnd['course_name']} ({rid})"
         try:
             detail = client.get_golf_scorecard(rid)
+            parse_round_detail(detail, rnd)
             time.sleep(FETCH_DELAY_S)
             raw_shots = None
             try:
@@ -212,7 +177,9 @@ def fetch_all(full: bool, since: str | None) -> None:
             except Exception as e:
                 print(f"  no shot data for {label}: {e.__class__.__name__}")
 
-            holes_rows = parse_holes(detail, rid)
+            pars_by_hole = pars_by_round.get(rid, {})
+
+            holes_rows = parse_holes(detail, rid, pars_by_hole)
             shots_rows = parse_shots(raw_shots, rid) if raw_shots else []
 
             (RAW_DIR / f"{rid}.json").write_text(
@@ -249,10 +216,6 @@ def fetch_all(full: bool, since: str | None) -> None:
 def load_or_empty(name: str, schema: dict) -> pl.DataFrame:
     path = DATA_DIR / name
     return pl.read_parquet(path) if path.exists() else pl.DataFrame(schema=schema)
-
-
-def empty(schema: dict) -> pl.DataFrame:
-    return pl.DataFrame(schema=schema)
 
 
 def main() -> None:
