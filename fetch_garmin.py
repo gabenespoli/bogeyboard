@@ -1,26 +1,100 @@
 """Fetch all golf rounds from Garmin Connect into Parquet tables.
 
 Usage:
-    uv run python -m bogeyboard.fetch_garmin            # incremental
-    uv run python -m bogeyboard.fetch_garmin --full     # re-backfill everything
-    uv run python -m bogeyboard.fetch_garmin --since 2026-06-01
+    uv run python fetch_garmin.py            # incremental
+    uv run python fetch_garmin.py --full     # re-backfill everything
+    uv run python fetch_garmin.py --since 2026-06-01
 """
 
 import argparse
+import getpass
 import json
 import sys
 import time
 from pathlib import Path
 
 import polars as pl
-
-from auth import get_client
-from models import HOLES_SCHEMA, ROUNDS_SCHEMA, SHOTS_SCHEMA
+from garminconnect import (
+    Garmin,
+    GarminConnectAuthenticationError,
+    GarminConnectConnectionError,
+)
 
 DATA_DIR = Path(__file__).resolve().parent / "data"
 RAW_DIR = DATA_DIR / "raw"
 
 FETCH_DELAY_S = 1.0
+TOKEN_STORE = Path("~/.garminconnect").expanduser()
+
+ROUNDS_SCHEMA = {
+    "round_id": pl.UInt64,
+    "date": pl.String,
+    "course_name": pl.String,
+    "score": pl.Int64,
+    "to_par": pl.Int64,
+    "holes_played": pl.UInt8,
+    "tee_box": pl.String,
+    "slope": pl.Float64,
+    "rating": pl.Float64,
+    "walk_distance_m": pl.Float64,
+}
+
+HOLES_SCHEMA = {
+    "round_id": pl.UInt64,
+    "hole_number": pl.UInt8,
+    "par": pl.UInt8,
+    "score": pl.Int64,
+    "putts": pl.UInt8,
+    "penalties": pl.UInt8,
+}
+
+SHOTS_SCHEMA = {
+    "round_id": pl.UInt64,
+    "hole_number": pl.UInt8,
+    "shot_number": pl.UInt8,
+    "club": pl.String,
+    "is_club_tagged": pl.Boolean,
+    "shot_type": pl.String,
+    "shot_source": pl.String,
+    "lie": pl.String,
+    "start_lat": pl.Float64,
+    "start_lon": pl.Float64,
+    "lat": pl.Float64,
+    "lon": pl.Float64,
+    "distance_m": pl.Float64,
+}
+
+
+def _prompt_mfa() -> str:
+    return input("Enter MFA code: ").strip()
+
+
+def get_client(token_store: Path = TOKEN_STORE) -> Garmin:
+    """Return a logged-in Garmin client, using cached tokens when possible."""
+    if token_store.exists():
+        try:
+            client = Garmin()
+            client.login(tokenstore=str(token_store))
+            return client
+        except (GarminConnectAuthenticationError, FileNotFoundError) as e:
+            print(f"Cached tokens invalid ({e.__class__.__name__}), logging in fresh...")
+        except GarminConnectConnectionError as e:
+            sys.exit(f"Connection error while using cached tokens: {e}")
+
+    email = input("Garmin email: ").strip()
+    password = getpass.getpass("Garmin password: ")
+
+    try:
+        client = Garmin(email=email, password=password, prompt_mfa=_prompt_mfa)
+        client.login(tokenstore=str(token_store))
+    except GarminConnectAuthenticationError as e:
+        sys.exit(f"Authentication failed: {e}")
+    except GarminConnectConnectionError as e:
+        sys.exit(f"Connection error: {e}")
+
+    print(f"Login OK — tokens cached at {token_store} (valid ~1 year)")
+    return client
+
 
 
 def _coord(v):
