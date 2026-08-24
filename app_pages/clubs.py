@@ -2,11 +2,13 @@ import altair as alt
 import streamlit as st
 
 import stats
+from filters import sidebar_filters
 
 st.title("Clubs")
 st.caption("Average carry distances from Garmin shot tracking, putts excluded.")
 
-clubs = stats.club_distances()
+round_ids, _ = sidebar_filters()
+clubs = stats.club_distances(round_ids)
 if clubs.height == 0:
     st.caption("No club-tagged shots yet — rerun the Garmin fetch after playing with CT10 sensors paired.")
 else:

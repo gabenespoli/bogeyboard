@@ -167,8 +167,10 @@ def handicap_index(summary: pl.DataFrame) -> float | None:
     return round(best["differential"].mean(), 1)
 
 
-def putt_distribution() -> pl.DataFrame:
-    holes = load_holes().filter(pl.col("putts").is_not_null()).with_columns(
+def putt_distribution(holes: pl.DataFrame | None = None) -> pl.DataFrame:
+    if holes is None:
+        holes = load_holes()
+    holes = holes.filter(pl.col("putts").is_not_null()).with_columns(
         pl.when(pl.col("putts") >= 4).then(4).otherwise(pl.col("putts")).alias("bin")
     )
     total = holes.height
@@ -184,8 +186,10 @@ def putt_distribution() -> pl.DataFrame:
     )
 
 
-def putts_by_gir() -> pl.DataFrame:
-    holes = enriched_holes().filter(pl.col("gir").is_not_null() & pl.col("putts").is_not_null())
+def putts_by_gir(holes: pl.DataFrame | None = None) -> pl.DataFrame:
+    if holes is None:
+        holes = enriched_holes()
+    holes = holes.filter(pl.col("gir").is_not_null() & pl.col("putts").is_not_null())
     return holes.group_by(pl.col("gir")).agg(
         pl.col("putts").mean().round(2).alias("avg_putts"),
         pl.len().alias("holes"),
@@ -205,12 +209,18 @@ def avg_score_by(expr: pl.Expr, order: list) -> pl.DataFrame:
     )
 
 
-def club_distances() -> pl.DataFrame:
+def club_distances(round_ids: list[int] | None = None) -> pl.DataFrame:
     shots = load_shots().filter(
         pl.col("club").is_not_null()
         & pl.col("distance_m").is_not_null()
         & (pl.col("shot_type") != "PUTT")
     )
+    if round_ids is not None:
+        shots = (
+            shots.filter(pl.col("round_id").is_in(round_ids))
+            if round_ids
+            else shots.clear()
+        )
     return (
         shots.group_by("club")
         .agg(

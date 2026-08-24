@@ -3,10 +3,12 @@ import polars as pl
 import streamlit as st
 
 import stats
+from filters import sidebar_filters, filter_holes
 
 st.title("Scoring")
 
-holes = stats.load_holes().filter(pl.col("score").is_not_null())
+round_ids, _ = sidebar_filters()
+holes = filter_holes(stats.load_holes(), round_ids).filter(pl.col("score").is_not_null())
 
 by_number = (
     holes.group_by("hole_number")

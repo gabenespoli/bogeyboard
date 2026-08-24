@@ -56,6 +56,12 @@ def _is_logged_in(session: requests.Session) -> bool:
 def login(session: requests.Session, debug: bool = False) -> None:
     email = input("TheGrint email/username: ").strip()
     password = getpass.getpass("TheGrint password: ")
+
+    session.cookies.clear()
+    r0 = session.get(f"{BASE}/passthru", timeout=30)
+    if debug:
+        print(f"debug: fresh passthru GET status={r0.status_code} cookies={list(session.cookies.keys())}")
+
     r = session.post(
         f"{BASE}/login",
         data={
@@ -65,23 +71,40 @@ def login(session: requests.Session, debug: bool = False) -> None:
             "submit-form-login": "",
         },
         timeout=30,
+        allow_redirects=False,
     )
     time.sleep(FETCH_DELAY_S)
+
+    location = r.headers.get("Location", "")
+    set_cookies = [
+        (c.name, c.domain, c.expires) for c in session.cookies
+    ]
     if debug:
         print(
-            f"debug: status={r.status_code} final_url={r.url} "
-            f"history={[(h.status_code, h.headers.get('Location')) for h in r.history]} "
-            f"invalid={'Invalid Username or Password' in r.text}"
+            f"debug: login POST status={r.status_code} location={location!r}\n"
+            f"debug: jar after POST={set_cookies}\n"
+            f"debug: set-cookie headers={r.headers.get('Set-Cookie')!r}"
         )
-    if "/passthru" in str(r.url) or "Invalid Username or Password" in r.text:
+
+    if "Invalid Username or Password" in (
+        r.text if not r.headers.get("Location") else ""
+    ):
         sys.exit(
             "TheGrint login rejected — check username/password "
             "(try your email address as the username)"
         )
-    if not _is_logged_in(session):
-        sys.exit("Login POST accepted but /score looks logged-out — run again with --debug")
+    if r.status_code != 302 or "/passthru" in location:
+        sys.exit(f"Unexpected login response — rerun with --debug (status={r.status_code}, location={location!r})")
+
     _save_session(session)
-    print(f"Login OK — cookies cached at {SESSION_FILE}")
+    print(f"Login redirect OK — cookies cached at {SESSION_FILE}")
+
+    if not _is_logged_in(session):
+        msg = "Session cookie saved but /score still looks logged-out"
+        if debug:
+            msg += f" — jar={[(c.name, c.domain, c.expires) for c in session.cookies]}"
+        sys.exit(msg)
+    print("Verified logged in")
 
 
 def get_session(debug: bool = False) -> requests.Session:
