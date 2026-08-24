@@ -5,7 +5,7 @@ import streamlit as st
 
 st.set_page_config(page_title="Bogeyboard", layout="wide")
 
-DATA_DIR = Path(__file__).resolve().parents[2] / "data"
+DATA_DIR = Path(__file__).resolve().parent / "data"
 
 
 @st.cache_data(ttl=600, max_entries=3)

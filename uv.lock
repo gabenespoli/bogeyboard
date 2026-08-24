@@ -60,7 +60,7 @@ wheels = [
 [[package]]
 name = "bogeyboard"
 version = "0.1.0"
-source = { editable = "." }
+source = { virtual = "." }
 dependencies = [
     { name = "garminconnect" },
     { name = "polars" },
@@ -71,7 +71,7 @@ dependencies = [
 requires-dist = [
     { name = "garminconnect", specifier = ">=0.3.11" },
     { name = "polars", specifier = ">=1.0" },
-    { name = "streamlit", specifier = ">=1.62.0" },
+    { name = "streamlit", specifier = ">=1.50" },
 ]
 
 [[package]]

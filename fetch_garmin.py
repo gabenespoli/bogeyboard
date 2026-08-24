@@ -14,10 +14,10 @@ from pathlib import Path
 
 import polars as pl
 
-from .auth import get_client
-from .models import HOLES_SCHEMA, ROUNDS_SCHEMA, SHOTS_SCHEMA
+from auth import get_client
+from models import HOLES_SCHEMA, ROUNDS_SCHEMA, SHOTS_SCHEMA
 
-DATA_DIR = Path(__file__).resolve().parents[2] / "data"
+DATA_DIR = Path(__file__).resolve().parent / "data"
 RAW_DIR = DATA_DIR / "raw"
 
 FETCH_DELAY_S = 1.0
