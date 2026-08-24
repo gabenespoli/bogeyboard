@@ -49,6 +49,7 @@ HOLES_SCHEMA = {
     "putts": pl.UInt8,
     "penalties": pl.UInt8,
     "fairway": pl.String,
+    "yardage": pl.UInt16,
 }
 
 SHOTS_SCHEMA = {
@@ -157,6 +158,7 @@ def parse_holes(detail: dict, round_id: int, pars_by_hole: dict[int, int]) -> li
                 "putts": h.get("putts"),
                 "penalties": h.get("penalties"),
                 "fairway": None,
+                "yardage": None,
             }
         )
     return rows

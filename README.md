@@ -65,4 +65,16 @@ Delete any `.parquet` file and rerun the corresponding scraper (with `--full` fo
 uv run streamlit run app.py
 ```
 
-Tabs for rounds, holes, and shots with round filters and an all/Garmin/Grint source pill.
+Multi-page Streamlit app fed by both sources (Grint rounds appear as historical context alongside Garmin data):
+
+| Page | Contents |
+| --- | --- |
+| Overview | Handicap index, avg score, FIR%/GIR% KPIs; rounds bar chart with best-8-of-last-20 differentials highlighted |
+| Scoring | Average score by hole number, hole par, and yardage bucket |
+| Putting | Putt-count distribution donut, putts by GIR, last-20-rounds trend |
+| Ball striking | FIR%, GIR%, and scrambling trends over time |
+| Clubs | Average distance per club from shot tracking |
+| Data | Raw rounds/holes/shots tables with round filters |
+
+Derived stats (handicap differentials, FIR, GIR, scrambling) are computed in `stats.py` from the Parquet tables — FIR/GIR come from decoded TheGrint fairway codes or exact Garmin shot lies depending on the source.
+

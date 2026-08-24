@@ -50,10 +50,10 @@ def _load_session() -> requests.Session | None:
 
 def _is_logged_in(session: requests.Session) -> bool:
     r = session.get(f"{BASE}/score", params={"type_score": "0"}, timeout=30)
-    return r.status_code == 200 and "scoresArray" in r.text
+    return r.status_code == 200 and 'id="usernameLogin"' not in r.text
 
 
-def login(session: requests.Session) -> None:
+def login(session: requests.Session, debug: bool = False) -> None:
     email = input("TheGrint email/username: ").strip()
     password = getpass.getpass("TheGrint password: ")
     r = session.post(
@@ -67,19 +67,30 @@ def login(session: requests.Session) -> None:
         timeout=30,
     )
     time.sleep(FETCH_DELAY_S)
+    if debug:
+        print(
+            f"debug: status={r.status_code} final_url={r.url} "
+            f"history={[(h.status_code, h.headers.get('Location')) for h in r.history]} "
+            f"invalid={'Invalid Username or Password' in r.text}"
+        )
+    if "/passthru" in str(r.url) or "Invalid Username or Password" in r.text:
+        sys.exit(
+            "TheGrint login rejected — check username/password "
+            "(try your email address as the username)"
+        )
     if not _is_logged_in(session):
-        sys.exit("TheGrint login failed — check credentials (and that /login didn't change)")
+        sys.exit("Login POST accepted but /score looks logged-out — run again with --debug")
     _save_session(session)
     print(f"Login OK — cookies cached at {SESSION_FILE}")
 
 
-def get_session() -> requests.Session:
+def get_session(debug: bool = False) -> requests.Session:
     session = _load_session()
     if session and _is_logged_in(session):
         return session
     session = session or requests.Session()
     session.headers["User-Agent"] = UA
-    login(session)
+    login(session, debug=debug)
     return session
 
 
@@ -171,14 +182,18 @@ def parse_scorecard(html: str) -> dict:
         name = inp.get("name", "")
         hole = int(inp["data-hole"])
         val = inp.get("value", "").strip()
-        if name.startswith("scH") and val:
+        if name.startswith("scH") and val and int(val) > 0:
             scores[hole] = int(val)
         elif name.startswith("ptH") and val:
             putts[hole] = int(val)
         elif name.startswith("pH") and val:
             penalties[hole] = val
-        elif name.startswith("fH") and val:
-            fairways[hole] = val
+    for inp in soup.select("input[name^='fH']"):  # fH inputs have no data-hole attr
+        m = re.search(r"fH(\d+)$", inp.get("name", ""))
+        val = (inp.get("value") or "").strip()
+        if m and val:
+            fairways[int(m.group(1))] = val
+    putts = {h: p for h, p in putts.items() if h in scores}
 
     return {
         "id": int(hidden("#score-id") or 0),
@@ -207,6 +222,21 @@ def fetch_scorecard(session: requests.Session, rnd: dict) -> dict:
     RAW_DIR.mkdir(parents=True, exist_ok=True)
     (RAW_DIR / f"{rnd['id']}.html").write_text(r.text)
     return card
+
+
+def clean_row_values(vals: list[int]) -> list[int]:
+    """Row payloads are [9 values, out-subtotal, 9 values, in-subtotal, total]."""
+    if len(vals) >= 21:
+        return vals[:9] + vals[10:19]
+    if len(vals) == 20:
+        return vals[:9] + vals[10:18]
+    if len(vals) == 19:
+        return vals[:18]
+    if len(vals) == 11:
+        return vals[:9]
+    if len(vals) == 9:
+        return vals
+    return []
 
 
 def load_course_cache() -> dict:
@@ -238,12 +268,15 @@ def resolve_pars(session: requests.Session, card: dict, holes9: bool) -> dict:
             data = r.json()
         except ValueError:
             data = {}
-        pars_html = data.get("par", "") or ""
         entry = {
-            "pars": [int(x) for x in re.findall(r">\s*(\d+)\s*<", pars_html)],
-            "course_par": data.get("coursePar"),
+            "pars": clean_row_values(
+                [int(x) for x in re.findall(r">\s*(\d+)\s*<", data.get("par", "") or "")]
+            ),
+            "yardages": clean_row_values(
+                [int(x) for x in re.findall(r">\s*(\d+)\s*<", data.get("yardage", "") or "")]
+            ),
         }
-        for meta in ("slope", "rating", "statistical_par", "yardage_total"):
+        for meta in ("slope", "rating", "statistical_par"):
             if meta in data:
                 entry[meta] = data[meta]
         cache[key] = entry
@@ -255,12 +288,17 @@ def resolve_pars(session: requests.Session, card: dict, holes9: bool) -> dict:
 def build_rows(card: dict, tee_data: dict, holes9: bool) -> tuple[dict, list[dict]]:
     holes = sorted(card["scores"])
     pars_list = tee_data.get("pars") or []
+    yardage_list = tee_data.get("yardages") or []
     # For 9-hole back nines the API returns front-nine ordering; map by position.
-    pars_by_hole = {}
+    pars_by_hole, yards_by_hole = {}, {}
     if len(pars_list) == len(holes):
         pars_by_hole = dict(zip(holes, pars_list))
     elif len(pars_list) == 18 and holes9:
         pars_by_hole = {h: pars_list[h - 1] for h in holes}
+    if len(yardage_list) == len(holes):
+        yards_by_hole = dict(zip(holes, yardage_list))
+    elif len(yardage_list) == 18 and holes9:
+        yards_by_hole = {h: yardage_list[h - 1] for h in holes}
 
     round_row = {
         "round_id": card["id"],
@@ -294,6 +332,7 @@ def build_rows(card: dict, tee_data: dict, holes9: bool) -> tuple[dict, list[dic
                 "putts": card["putts"].get(h),
                 "penalties": sum(1 for c in code.lower() if c in PENALTY_CODES),
                 "fairway": card["fairways"].get(h),
+                "yardage": yards_by_hole.get(h),
             }
         )
     return round_row, hole_rows
@@ -302,12 +341,15 @@ def build_rows(card: dict, tee_data: dict, holes9: bool) -> tuple[dict, list[dic
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--cutoff", metavar="YYYY-MM-DD", help="only import rounds before this date")
+    parser.add_argument("--debug", action="store_true", help="print login diagnostics")
     args = parser.parse_args()
 
-    session = get_session()
+    session = get_session(debug=args.debug)
 
     stored_rounds = load_or_empty("rounds.parquet", ROUNDS_SCHEMA)
     holes_df = load_or_empty("holes.parquet", HOLES_SCHEMA)
+    if "yardage" not in holes_df.columns:
+        holes_df = holes_df.with_columns(pl.lit(None, dtype=pl.UInt16).alias("yardage"))
     grint_ids = set(
         stored_rounds.filter(pl.col("source") == "grint")["round_id"].to_list()
     ) if stored_rounds.height else set()
