@@ -61,6 +61,16 @@ python fetch_grint.py
 
 This imports rounds from before you had your Garmin watch. Rounds you tracked in both places are handled automatically — no duplicates.
 
+### Hole19
+
+Same steps, but run:
+
+```
+python fetch_hole19.py
+```
+
+This imports all rounds from your Hole19 account (via the hole19golf.com website). By default every Hole19 round not yet stored is imported; if you also track rounds in Garmin or TheGrint, duplicates are not removed automatically.
+
 ## Credentials (optional)
 
 Both apps save their login sessions after you sign in once. If you'd rather never be prompted at all — even when sessions expire — store your credentials in a file called `.bogeyboard_login.json` in your home folder (`~` on Mac, `C:\Users\YourName` on Windows):
@@ -75,12 +85,16 @@ Both apps save their login sessions after you sign in once. If you'd rather neve
     "grint": {
       "email": "you@example.com",
       "password": "your-grint-password"
+    },
+    "hole19": {
+      "email": "you@example.com",
+      "password": "your-hole19-password"
     }
   }
 }
 ```
 
-Create it with TextEdit (Mac) or Notepad (Windows); make sure it's saved as plain text with exactly that name starting with a dot. Omit either service if you don't use it. Passwords are stored in plain text — keep the file private. Environment variables `GARMIN_EMAIL` / `GARMIN_PASSWORD` and `GRINT_EMAIL` / `GRINT_PASSWORD` override the file if you prefer that route.
+Create it with TextEdit (Mac) or Notepad (Windows); make sure it's saved as plain text with exactly that name starting with a dot. Omit any service you don't use. Passwords are stored in plain text — keep the file private. Environment variables `GARMIN_EMAIL` / `GARMIN_PASSWORD`, `GRINT_EMAIL` / `GRINT_PASSWORD` and `HOLE19_EMAIL` / `HOLE19_PASSWORD` override the file if you prefer that route.
 
 > Both scrapers talk to unofficial/private interfaces and may break if the websites change. All requests are your own account data, rate-limited with small delays between requests.
 
@@ -90,10 +104,10 @@ Everything lands in the `data` folder inside Bogeyboard:
 
 | File | Contents |
 | --- | --- |
-| `rounds.parquet` | One row per round: id, source (`garmin`/`grint`), date, course, score, to_par, tee box, slope/rating |
-| `holes.parquet` | Per-hole rows: score, putts, penalties, fairway code (Grint only), pin position (Garmin only) |
+| `rounds.parquet` | One row per round: id, source (`garmin`/`grint`/`hole19`), date, course, score, to_par, tee box, slope/rating |
+| `holes.parquet` | Per-hole rows: score, putts, penalties, fairway code (Grint: numeric code, Hole19: `center`/`target`/`left`/`right`), pin position (Garmin only) |
 | `shots.parquet` | Shot-by-shot GPS data (Garmin only): club, lie, start/end coordinates, distance, shot type/source |
-| `raw/*.json`, `raw/grint/*.html` | Unparsed responses per round, kept for debugging |
+| `raw/*.json`, `raw/grint/*.html`, `raw/hole19/*.html` | Unparsed responses per round, kept for debugging |
 | `courses.json` | Cached course/tee data from TheGrint |
 
 ## Refreshing your stats
@@ -105,6 +119,7 @@ After playing a round:
    ```
    python fetch_garmin.py
    python fetch_grint.py
+   python fetch_hole19.py
    ```
 3. Refresh your browser tab
 
@@ -113,6 +128,7 @@ To force a complete re-download of one source:
 ```
 python fetch_garmin.py --full
 python fetch_grint.py --full
+python fetch_hole19.py --full
 ```
 
 Other options: `--since YYYY-MM-DD` and `--cutoff YYYY-MM-DD` limit what gets fetched; `--debug` prints login diagnostics.
@@ -138,4 +154,4 @@ Derived stats (handicap differentials, FIR, GIR, scrambling) are computed in `st
 
 This is a plain Python project. Install dependencies however you like — e.g. `pip install -r requirements.txt`, or with [uv](https://docs.astral.sh/uv/) via `uv sync` using the bundled `pyproject.toml`. Requires Python 3.12+ (the garminconnect dependency enforces this).
 
-Run scrapers with `uv run python <script>` or from an activated environment. Useful extras: `fetch_grint.py --debug` prints Grint login diagnostics; raw API responses are kept under `data/raw/` for debugging parser issues.
+Run scrapers with `uv run python <script>` or from an activated environment. Useful extras: `fetch_grint.py --debug` prints Grint login diagnostics; `fetch_hole19.py --debug` prints login/pagination diagnostics and saves unparseable pages under `data/raw/hole19/`; raw API responses are kept under `data/raw/` for debugging parser issues.

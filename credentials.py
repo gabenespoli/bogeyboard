@@ -15,6 +15,7 @@ LOGIN_FILE = Path("~/.bogeyboard_login.json").expanduser()
 ENV_KEYS = {
     "garmin": ("GARMIN_EMAIL", "GARMIN_PASSWORD"),
     "grint": ("GRINT_EMAIL", "GRINT_PASSWORD"),
+    "hole19": ("HOLE19_EMAIL", "HOLE19_PASSWORD"),
 }
 
 

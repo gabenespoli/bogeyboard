@@ -6,6 +6,13 @@ import streamlit as st
 DATA_DIR = __import__("pathlib").Path(__file__).resolve().parent / "data"
 
 GRINT_FAIRWAY_HIT_CODE = "3"
+HOLE19_FAIRWAY_HIT_CODES = {"center", "target"}
+HOLE19_TEE_CODES = {
+    "center": "hit",
+    "target": "hit",
+    "left": "miss_left",
+    "right": "miss_right",
+}
 
 
 @st.cache_data(ttl=600)
@@ -39,7 +46,16 @@ def enriched_holes() -> pl.DataFrame:
         .alias("fir_grint")
     ).with_columns(
         pl.when(
-            (pl.col("source") == "grint")
+            (pl.col("source") == "hole19")
+            & pl.col("par").is_in([4, 5])
+            & pl.col("fairway").is_not_null()
+        )
+        .then(pl.col("fairway").is_in(HOLE19_FAIRWAY_HIT_CODES))
+        .otherwise(None)
+        .alias("fir_hole19")
+    ).with_columns(
+        pl.when(
+            pl.col("source").is_in(["grint", "hole19"])
             & pl.col("par").is_not_null()
             & pl.col("score").is_not_null()
             & pl.col("putts").is_not_null()
@@ -97,9 +113,9 @@ def enriched_holes() -> pl.DataFrame:
         )
 
     return h.with_columns(
-        pl.coalesce("fir_garmin", "fir_grint").alias("fir"),
+        pl.coalesce("fir_garmin", "fir_grint", "fir_hole19").alias("fir"),
         pl.coalesce("gir_garmin", "gir_grint").alias("gir"),
-    ).drop("fir_grint", "gir_grint", "fir_garmin", "gir_garmin")
+    ).drop("fir_grint", "fir_hole19", "gir_grint", "fir_garmin", "gir_garmin")
 
 
 def round_summary() -> pl.DataFrame:
@@ -336,15 +352,14 @@ def tee_shot_outcomes(round_ids: list[int] | None = None) -> pl.DataFrame:
     holes = _filter_rounds(enriched_holes(), round_ids)
 
     rows = []
-    grint_holes = holes.filter(
-        (pl.col("source") == "grint")
+    app_holes = holes.filter(
+        pl.col("source").is_in(["grint", "hole19"])
         & pl.col("par").is_in([4, 5])
         & pl.col("fairway").is_not_null()
-    ).select("round_id", "fairway")
-    for r in grint_holes.iter_rows(named=True):
-        rows.append(
-            (r["round_id"], GRINT_TEE_CODES.get(str(r["fairway"]), "miss_other"))
-        )
+    ).select("round_id", "source", "fairway")
+    for r in app_holes.iter_rows(named=True):
+        codes = HOLE19_TEE_CODES if r["source"] == "hole19" else GRINT_TEE_CODES
+        rows.append((r["round_id"], codes.get(str(r["fairway"]), "miss_other")))
 
     garmin_rounds = load_rounds()
     garmin_rounds = (
