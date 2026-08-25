@@ -17,6 +17,7 @@ import polars as pl
 import requests
 from bs4 import BeautifulSoup
 
+import credentials
 from fetch_garmin import HOLES_SCHEMA, ROUNDS_SCHEMA, load_or_empty
 
 BASE = "https://thegrint.com"
@@ -53,15 +54,47 @@ def _is_logged_in(session: requests.Session) -> bool:
     return r.status_code == 200 and 'id="usernameLogin"' not in r.text
 
 
-def login(session: requests.Session, debug: bool = False) -> None:
-    email = input("TheGrint email/username: ").strip()
-    password = getpass.getpass("TheGrint password: ")
-
+def _fresh_session(session: requests.Session) -> None:
+    """Clear cookies and establish a fresh PHPSESSID before logging in."""
     session.cookies.clear()
     r0 = session.get(f"{BASE}/passthru", timeout=30)
-    if debug:
-        print(f"debug: fresh passthru GET status={r0.status_code} cookies={list(session.cookies.keys())}")
+    return r0
 
+
+def login(session: requests.Session, debug: bool = False) -> None:
+    saved = credentials.get_login("grint")
+    if saved:
+        email, password = saved
+        _fresh_session(session)
+        if _post_login(session, email, password, debug=debug):
+            _save_session(session)
+            print("Login OK using stored credentials")
+            return
+        print("Stored credentials rejected, prompting...")
+
+    email = input("TheGrint email/username: ").strip()
+    password = getpass.getpass("TheGrint password: ")
+    _fresh_session(session)
+    if not _post_login(session, email, password, debug=debug):
+        sys.exit(
+            "TheGrint login rejected — check username/password "
+            "(try your email address as the username)"
+        )
+    _save_session(session)
+    if input(f"Save these credentials to {credentials.LOGIN_FILE}? (y/n) ").strip().lower() == "y":
+        credentials.save_login("grint", email, password)
+        print(f"Credentials saved to {credentials.LOGIN_FILE}")
+    if not _is_logged_in(session):
+        msg = "Session cookie saved but /score still looks logged-out"
+        if debug:
+            msg += f" — jar={[(c.name, c.domain) for c in session.cookies]}"
+        sys.exit(msg)
+    print(f"Login OK — cookies cached at {SESSION_FILE}")
+
+
+def _post_login(
+    session: requests.Session, email: str, password: str, debug: bool = False
+) -> bool:
     r = session.post(
         f"{BASE}/login",
         data={
@@ -76,35 +109,18 @@ def login(session: requests.Session, debug: bool = False) -> None:
     time.sleep(FETCH_DELAY_S)
 
     location = r.headers.get("Location", "")
-    set_cookies = [
-        (c.name, c.domain, c.expires) for c in session.cookies
-    ]
     if debug:
+        set_cookies = [(c.name, c.domain, c.expires) for c in session.cookies]
         print(
             f"debug: login POST status={r.status_code} location={location!r}\n"
             f"debug: jar after POST={set_cookies}\n"
             f"debug: set-cookie headers={r.headers.get('Set-Cookie')!r}"
         )
 
-    if "Invalid Username or Password" in (
-        r.text if not r.headers.get("Location") else ""
-    ):
-        sys.exit(
-            "TheGrint login rejected — check username/password "
-            "(try your email address as the username)"
-        )
-    if r.status_code != 302 or "/passthru" in location:
-        sys.exit(f"Unexpected login response — rerun with --debug (status={r.status_code}, location={location!r})")
-
-    _save_session(session)
-    print(f"Login redirect OK — cookies cached at {SESSION_FILE}")
-
-    if not _is_logged_in(session):
-        msg = "Session cookie saved but /score still looks logged-out"
-        if debug:
-            msg += f" — jar={[(c.name, c.domain, c.expires) for c in session.cookies]}"
-        sys.exit(msg)
-    print("Verified logged in")
+    body = r.text if r.status_code == 200 else ""
+    if "Invalid Username or Password" in body:
+        return False
+    return r.status_code == 302 and "/passthru" not in location
 
 
 def get_session(debug: bool = False) -> requests.Session:

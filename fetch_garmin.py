@@ -20,6 +20,8 @@ from garminconnect import (
     GarminConnectConnectionError,
 )
 
+import credentials
+
 DATA_DIR = Path(__file__).resolve().parent / "data"
 RAW_DIR = DATA_DIR / "raw"
 
@@ -87,6 +89,19 @@ def get_client(token_store: Path = TOKEN_STORE) -> Garmin:
         except GarminConnectConnectionError as e:
             sys.exit(f"Connection error while using cached tokens: {e}")
 
+    saved = credentials.get_login("garmin")
+    if saved:
+        email, password = saved
+        try:
+            client = Garmin(email=email, password=password, prompt_mfa=_prompt_mfa)
+            client.login(tokenstore=str(token_store))
+            print("Login OK using stored credentials")
+            return client
+        except GarminConnectAuthenticationError as e:
+            print(f"Stored credentials rejected ({e.__class__.__name__}), prompting...")
+        except GarminConnectConnectionError as e:
+            sys.exit(f"Connection error: {e}")
+
     email = input("Garmin email: ").strip()
     password = getpass.getpass("Garmin password: ")
 
@@ -97,6 +112,10 @@ def get_client(token_store: Path = TOKEN_STORE) -> Garmin:
         sys.exit(f"Authentication failed: {e}")
     except GarminConnectConnectionError as e:
         sys.exit(f"Connection error: {e}")
+
+    if input("Save these credentials to ~/.bogeyboard_login.json? (y/n) ").strip().lower() == "y":
+        credentials.save_login("garmin", email, password)
+        print(f"Credentials saved to {credentials.LOGIN_FILE}")
 
     print(f"Login OK — tokens cached at {token_store} (valid ~1 year)")
     return client
