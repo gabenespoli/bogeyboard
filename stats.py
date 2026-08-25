@@ -27,7 +27,27 @@ def load_holes() -> pl.DataFrame:
 
 @st.cache_data(ttl=600)
 def load_shots() -> pl.DataFrame:
-    return pl.read_parquet(DATA_DIR / "shots.parquet")
+    path = DATA_DIR / "shots.parquet"
+    if not path.exists():
+        # Garmin-only table; Grint/Hole19-only users never have one.
+        from fetch_garmin import SHOTS_SCHEMA
+
+        return pl.DataFrame(schema=SHOTS_SCHEMA)
+    return pl.read_parquet(path)
+
+
+def require_data() -> None:
+    """First-run gate: show a setup prompt instead of crashing on missing data files."""
+    missing = [n for n in ("rounds.parquet", "holes.parquet") if not (DATA_DIR / n).exists()]
+    if not missing:
+        return
+    st.info(
+        "No golf data yet. Sign in to Garmin, TheGrint or Hole19 and run your first sync — "
+        "it only takes a minute."
+    )
+    if st.button("Open the Accounts page", type="primary"):
+        st.switch_page("app_pages/accounts.py")
+    st.stop()
 
 
 def enriched_holes() -> pl.DataFrame:

@@ -8,6 +8,8 @@ from filters import sidebar_filters, filter_holes, add_x_labels
 
 st.title("Putting")
 
+stats.require_data()
+
 round_ids, _ = sidebar_filters()
 
 dist = stats.putt_distribution(filter_holes(stats.load_holes(), round_ids))

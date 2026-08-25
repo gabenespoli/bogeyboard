@@ -18,7 +18,7 @@ One-time setup, about 10 minutes:
    ```
 5. **Double-click `start_mac.command`** in Finder. The first time, it installs everything it needs (a few minutes). After that it starts instantly, and your browser opens the dashboard at `http://localhost:8501`.
 
-From now on: **double-click `start_mac.command` whenever you want to see your stats.** Close the Terminal window when you're done.
+From now on: **double-click `start_mac.command` whenever you want to see your stats.** Close the Terminal window when you're done. Until your first sync, the chart pages show a prompt pointing you to the Accounts page.
 
 ## Setup — Windows
 

@@ -11,6 +11,8 @@ st.caption(
     "Grint-era scrambling is approximated from scores and putts."
 )
 
+stats.require_data()
+
 round_ids, _ = sidebar_filters()
 summary = add_x_labels(
     stats.round_summary()

@@ -8,6 +8,8 @@ from filters import sidebar_filters, add_x_labels
 st.title("Overview")
 st.caption("Best-8-of-last-20 differentials highlighted; handicap index always uses full history")
 
+stats.require_data()
+
 full = stats.round_summary()
 round_ids, summary = sidebar_filters(full)
 summary = summary.sort("date")

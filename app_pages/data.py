@@ -5,6 +5,8 @@ import stats
 
 st.title("Data")
 
+stats.require_data()
+
 rounds = stats.load_rounds()
 holes = stats.load_holes()
 shots = stats.load_shots()

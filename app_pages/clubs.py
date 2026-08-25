@@ -9,6 +9,8 @@ from filters import sidebar_filters
 st.title("Clubs")
 st.caption("Shot data from Garmin tracking, putts excluded. All charts respect the sidebar filters.")
 
+stats.require_data()
+
 round_ids, _ = sidebar_filters()
 
 available = stats.available_clubs(round_ids)
