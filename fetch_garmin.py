@@ -9,6 +9,7 @@ Usage:
 import argparse
 import getpass
 import json
+import os
 import sys
 import time
 from pathlib import Path
@@ -27,6 +28,9 @@ RAW_DIR = DATA_DIR / "raw"
 
 FETCH_DELAY_S = 1.0
 TOKEN_STORE = Path("~/.garminconnect").expanduser()
+
+# Set by main() when --headless is passed; the dashboard runs syncs headlessly.
+HEADLESS = False
 
 ROUNDS_SCHEMA = {
     "round_id": pl.UInt64,
@@ -74,6 +78,11 @@ SHOTS_SCHEMA = {
 
 
 def _prompt_mfa() -> str:
+    code = os.environ.get("GARMIN_MFA_CODE", "").strip()
+    if code:
+        return code
+    if HEADLESS:
+        sys.exit("Garmin MFA required — enter a current code on the Accounts page before syncing")
     return input("Enter MFA code: ").strip()
 
 
@@ -101,6 +110,9 @@ def get_client(token_store: Path = TOKEN_STORE) -> Garmin:
             print(f"Stored credentials rejected ({e.__class__.__name__}), prompting...")
         except GarminConnectConnectionError as e:
             sys.exit(f"Connection error: {e}")
+
+    if HEADLESS:
+        sys.exit("No Garmin credentials stored — sign in on the Accounts page first")
 
     email = input("Garmin email: ").strip()
     password = getpass.getpass("Garmin password: ")
@@ -324,10 +336,17 @@ def load_or_empty(name: str, schema: dict) -> pl.DataFrame:
 
 
 def main() -> None:
+    global HEADLESS
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--full", action="store_true", help="re-fetch everything")
     parser.add_argument("--since", metavar="YYYY-MM-DD", help="only fetch rounds after this date")
+    parser.add_argument(
+        "--headless",
+        action="store_true",
+        help="never prompt interactively; fail with a clear error if credentials are missing",
+    )
     args = parser.parse_args()
+    HEADLESS = args.headless
     fetch_all(full=args.full, since=args.since)
 
 

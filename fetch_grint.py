@@ -30,6 +30,9 @@ ROUNDS_PATH = DATA_DIR / "rounds.parquet"
 FETCH_DELAY_S = 1.0
 HANDICAP_COMPANY_ID = "7"
 
+# Set by main() when --headless is passed; the dashboard runs syncs headlessly.
+HEADLESS = False
+
 UA = (
     "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 "
     "(KHTML, like Gecko) Chrome/126.0 Safari/537.36"
@@ -72,6 +75,8 @@ def login(session: requests.Session, debug: bool = False) -> None:
             return
         print("Stored credentials rejected, prompting...")
 
+    if HEADLESS:
+        sys.exit("No TheGrint credentials stored — sign in on the Accounts page first")
     email = input("TheGrint email/username: ").strip()
     password = getpass.getpass("TheGrint password: ")
     _fresh_session(session)
@@ -378,11 +383,18 @@ def build_rows(card: dict, tee_data: dict, holes9: bool) -> tuple[dict, list[dic
 
 
 def main() -> None:
+    global HEADLESS
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--cutoff", metavar="YYYY-MM-DD", help="only import rounds before this date")
     parser.add_argument("--full", action="store_true", help="re-fetch all Grint rounds, replacing existing ones")
     parser.add_argument("--debug", action="store_true", help="print login diagnostics")
+    parser.add_argument(
+        "--headless",
+        action="store_true",
+        help="never prompt interactively; fail with a clear error if credentials are missing",
+    )
     args = parser.parse_args()
+    HEADLESS = args.headless
 
     session = get_session(debug=args.debug)
 
