@@ -39,11 +39,41 @@ uv run python fetch_grint.py
 
 # Or with an explicit cutoff date (YYYY-MM-DD)
 uv run python fetch_grint.py --cutoff 2021-08-14
+
+# Re-fetch all Grint rounds, replacing previously imported ones
+uv run python fetch_grint.py --full
 ```
 
-First run prompts for TheGrint credentials; session cookies are cached at `~/.thegrint_session.json`. Reruns skip rounds already imported.
+First run prompts for TheGrint credentials; session cookies are cached at `~/.thegrint_session.json`. Reruns skip rounds already imported unless `--full` is given. Add `--debug` for login diagnostics.
 
 > Both scrapers use unofficial/private interfaces and may break if the sites change. All requests are your own account data, rate-limited with small delays between requests.
+
+## Credentials
+
+Both scrapers cache their session after login (Garmin tokens at `~/.garminconnect`, valid ~1 year; Grint cookies at `~/.thegrint_session.json`). When those expire, credentials are resolved in this order:
+
+1. Environment variables: `GARMIN_EMAIL` / `GARMIN_PASSWORD` and `GRINT_EMAIL` / `GRINT_PASSWORD`
+2. `~/.bogeyboard_login.json`
+3. Interactive prompt — after a successful manual login you'll be offered to save the credentials to that file
+
+You can also create `~/.bogeyboard_login.json` yourself:
+
+```json
+{
+  "logins": {
+    "garmin": {
+      "email": "you@example.com",
+      "password": "your-garmin-password"
+    },
+    "grint": {
+      "email": "you@example.com",
+      "password": "your-grint-password"
+    }
+  }
+}
+```
+
+Omit either service if you don't use it. The file is written with `0600` permissions when saved by the scrapers. Note: passwords are stored in plain text — keep the file private.
 
 ## Data output
 
@@ -57,7 +87,7 @@ Everything lands in `data/`:
 | `raw/*.json`, `raw/grint/*.html` | Unparsed API responses per round, kept for debugging |
 | `courses.json` | Cached course/tee par data from TheGrint |
 
-Delete any `.parquet` file and rerun the corresponding scraper (with `--full` for Garmin) to rebuild it.
+Delete any `.parquet` file and rerun the corresponding scraper (with `--full`) to rebuild it from scratch.
 
 ## Dashboard
 

@@ -380,6 +380,7 @@ def build_rows(card: dict, tee_data: dict, holes9: bool) -> tuple[dict, list[dic
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--cutoff", metavar="YYYY-MM-DD", help="only import rounds before this date")
+    parser.add_argument("--full", action="store_true", help="re-fetch all Grint rounds, replacing existing ones")
     parser.add_argument("--debug", action="store_true", help="print login diagnostics")
     args = parser.parse_args()
 
@@ -390,9 +391,14 @@ def main() -> None:
     for col, dtype in (("yardage", pl.UInt16), ("pin_lat", pl.Float64), ("pin_lon", pl.Float64)):
         if col not in holes_df.columns:
             holes_df = holes_df.with_columns(pl.lit(None, dtype=dtype).alias(col))
-    grint_ids = set(
-        stored_rounds.filter(pl.col("source") == "grint")["round_id"].to_list()
-    ) if stored_rounds.height else set()
+    if args.full:
+        stored_rounds = stored_rounds.filter(pl.col("source") != "grint")
+        holes_df = holes_df.filter(pl.col("source") != "grint")
+        grint_ids: set[int] = set()
+    else:
+        grint_ids = set(
+            stored_rounds.filter(pl.col("source") == "grint")["round_id"].to_list()
+        ) if stored_rounds.height else set()
 
     cutoff = args.cutoff
     if not cutoff:
