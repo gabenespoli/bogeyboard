@@ -336,23 +336,22 @@ def available_clubs(round_ids: list[int] | None = None) -> list[str]:
     )
 
 
-def club_distances(round_ids: list[int] | None = None) -> pl.DataFrame:
-    shots = load_shots().filter(
-        pl.col("club").is_not_null()
-        & pl.col("distance_m").is_not_null()
-        & (pl.col("shot_type") != "PUTT")
+def club_distances(
+    round_ids: list[int] | None = None,
+    club_names: list[str] | None = None,
+    trim_std: float | str | None = None,
+    trim_std_high: float | str | None = None,
+) -> pl.DataFrame:
+    shots = shot_distances(
+        club_names if club_names is not None else available_clubs(round_ids),
+        round_ids,
+        trim_std=trim_std,
+        trim_std_high=trim_std_high,
     )
-    if round_ids is not None:
-        shots = (
-            shots.filter(pl.col("round_id").is_in(round_ids))
-            if round_ids
-            else shots.clear()
-        )
     return (
         shots.group_by("club")
         .agg(
-            (pl.col("distance_m").mean() / 0.9144).round(1).alias("avg_yds"),
-            (pl.col("distance_m").max() / 0.9144).round(1).alias("best_yds"),
+            pl.col("distance_yds").mean().round(1).alias("avg_yds"),
             pl.len().alias("shots"),
         )
         .sort("avg_yds", descending=True)
