@@ -51,7 +51,7 @@ else:
 
         areas = (
             alt.Chart(curves, height=350)
-            .mark_area(opacity=0.35)
+            .mark_line(strokeWidth=2)
             .encode(
                 x=alt.X("distance:Q", title="Distance (yards)"),
                 y=alt.Y("density:Q", title="Density"),
