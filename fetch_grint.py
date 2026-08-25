@@ -371,8 +371,9 @@ def main() -> None:
 
     stored_rounds = load_or_empty("rounds.parquet", ROUNDS_SCHEMA)
     holes_df = load_or_empty("holes.parquet", HOLES_SCHEMA)
-    if "yardage" not in holes_df.columns:
-        holes_df = holes_df.with_columns(pl.lit(None, dtype=pl.UInt16).alias("yardage"))
+    for col, dtype in (("yardage", pl.UInt16), ("pin_lat", pl.Float64), ("pin_lon", pl.Float64)):
+        if col not in holes_df.columns:
+            holes_df = holes_df.with_columns(pl.lit(None, dtype=dtype).alias(col))
     grint_ids = set(
         stored_rounds.filter(pl.col("source") == "grint")["round_id"].to_list()
     ) if stored_rounds.height else set()

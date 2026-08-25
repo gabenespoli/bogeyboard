@@ -57,7 +57,7 @@ def enriched_holes() -> pl.DataFrame:
             .select(
                 "round_id",
                 "hole_number",
-                (pl.col("lie") == "Fairway").alias("_fir"),
+                pl.col("lie").is_in(["Fairway", "Green"]).alias("_fir"),
             )
         )
         first_green = (
@@ -314,6 +314,131 @@ def shot_density(
     top = curves["density"].max()
     means = means.with_columns(pl.lit(top * 0.97).alias("label_y"))
     return curves, means
+
+
+GRINT_TEE_CODES = {
+    "3": "hit",
+    "1": "miss_left",
+    "7": "miss_left",
+    "2": "miss_right",
+    "8": "miss_right",
+}
+
+
+def _filter_rounds(df: pl.DataFrame, round_ids: list[int] | None) -> pl.DataFrame:
+    if round_ids is None:
+        return df
+    return df.filter(pl.col("round_id").is_in(round_ids)) if round_ids else df.clear()
+
+
+def tee_shot_outcomes(round_ids: list[int] | None = None) -> pl.DataFrame:
+    """Per-round tee-shot outcome counts on par 4/5s: hit / miss_left / miss_right / miss_other."""
+    holes = _filter_rounds(enriched_holes(), round_ids)
+
+    rows = []
+    grint_holes = holes.filter(
+        (pl.col("source") == "grint")
+        & pl.col("par").is_in([4, 5])
+        & pl.col("fairway").is_not_null()
+    ).select("round_id", "fairway")
+    for r in grint_holes.iter_rows(named=True):
+        rows.append(
+            (r["round_id"], GRINT_TEE_CODES.get(str(r["fairway"]), "miss_other"))
+        )
+
+    garmin_rounds = load_rounds()
+    garmin_rounds = (
+        pl.DataFrame({"round_id": [], "source": []}, schema={"round_id": pl.UInt64, "source": pl.String})
+        if garmin_rounds.height == 0
+        else garmin_rounds.filter(pl.col("source") == "garmin")
+    )
+    garmin_holes = holes.filter(
+        (pl.col("source") == "garmin") & pl.col("par").is_in([4, 5])
+    ).select("round_id", "hole_number", "pin_lat", "pin_lon")
+    tee_shots = load_shots().join(garmin_holes, on=["round_id", "hole_number"], how="inner")
+    tee_shots = _filter_rounds(tee_shots, round_ids).filter(pl.col("shot_number") == 1)
+
+    import math
+
+    for r in tee_shots.iter_rows(named=True):
+        if r["lie"] in ("Fairway", "Green"):
+            rows.append((r["round_id"], "hit"))
+            continue
+        if None in (r["pin_lat"], r["start_lat"], r["start_lon"], r["lat"], r["lon"]):
+            rows.append((r["round_id"], "miss_other"))
+            continue
+        lat_mid = math.radians((r["start_lat"] + r["pin_lat"]) / 2)
+        ax = (r["pin_lon"] - r["start_lon"]) * math.cos(lat_mid)
+        ay = r["pin_lat"] - r["start_lat"]
+        bx = (r["lon"] - r["start_lon"]) * math.cos(lat_mid)
+        by = r["lat"] - r["start_lat"]
+        cross = ax * by - ay * bx
+        rows.append((r["round_id"], "miss_left" if cross > 0 else "miss_right"))
+
+    if not rows:
+        return pl.DataFrame(
+            {"round_id": [], "outcome": [], "n": []},
+            schema={"round_id": pl.UInt64, "outcome": pl.String, "n": pl.UInt32},
+        )
+    df = pl.DataFrame(rows, schema={"round_id": pl.UInt64, "outcome": pl.String}, orient="row")
+    return df.group_by("round_id", "outcome").agg(pl.len().alias("n"))
+
+
+def approach_shot_outcomes(round_ids: list[int] | None = None) -> pl.DataFrame:
+    """Per-round approach outcomes using Garmin's APPROACH shot flag.
+
+    hit = end-lie Green, or holed out (final shot of hole ending within ~6 yds of pin).
+    Misses classified left/right by geometry against the tee->pin line.
+    """
+    holes = load_holes().filter(pl.col("source") == "garmin").select(
+        "round_id", "hole_number", "par", "pin_lat", "pin_lon"
+    )
+    shots = (
+        load_shots()
+        .filter(pl.col("shot_type") == "APPROACH")
+        .join(holes, on=["round_id", "hole_number"], how="inner")
+        .sort("shot_number")
+    )
+    shots = _filter_rounds(shots, round_ids)
+    if shots.height == 0:
+        return pl.DataFrame(
+            {"round_id": [], "outcome": [], "n": []},
+            schema={"round_id": pl.UInt64, "outcome": pl.String, "n": pl.UInt32},
+        )
+
+    last_shot = shots.group_by("round_id", "hole_number").agg(
+        pl.col("shot_number").max().alias("_hole_last")
+    )
+    shots = shots.join(last_shot, on=["round_id", "hole_number"], how="left")
+
+    import math
+
+    rows = []
+    for r in shots.iter_rows(named=True):
+        end_lie = r["lie"]
+        holed = False
+        if r["pin_lat"] is not None and r["lat"] is not None and r["lon"] is not None:
+            dy = (r["lat"] - r["pin_lat"]) * 111_320
+            dx = (r["lon"] - r["pin_lon"]) * 111_320 * math.cos(math.radians(r["lat"]))
+            holed = math.hypot(dy, dx) / 0.9144 <= 6
+        is_final_shot = r["_hole_last"] == r["shot_number"]
+
+        if end_lie == "Green" or (holed and is_final_shot):
+            outcome = "hit_reg" if r["shot_number"] <= r["par"] - 2 else "hit_noreg"
+        elif None in (r["pin_lat"], r["start_lat"], r["start_lon"], r["lat"], r["lon"]):
+            outcome = "miss_other"
+        else:
+            lat_mid = math.radians((r["start_lat"] + r["pin_lat"]) / 2)
+            ax = (r["pin_lon"] - r["start_lon"]) * math.cos(lat_mid)
+            ay = r["pin_lat"] - r["start_lat"]
+            bx = (r["lon"] - r["start_lon"]) * math.cos(lat_mid)
+            by = r["lat"] - r["start_lat"]
+            cross = ax * by - ay * bx
+            outcome = "miss_left" if cross > 0 else "miss_right"
+        rows.append((r["round_id"], outcome))
+
+    df = pl.DataFrame(rows, schema={"round_id": pl.UInt64, "outcome": pl.String}, orient="row")
+    return df.group_by("round_id", "outcome").agg(pl.len().alias("n"))
 
 
 def available_clubs(round_ids: list[int] | None = None) -> list[str]:
