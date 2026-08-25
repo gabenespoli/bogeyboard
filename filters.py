@@ -29,7 +29,7 @@ def sidebar_filters(summary: pl.DataFrame | None = None) -> tuple[list[int], pl.
             "Round window",
             options=["All", "Last 10", "Last 20", "Last 40"],
             selection_mode="single",
-            default="All",
+            default="Last 20",
             key="filter_window",
         )
         hcp_only = st.checkbox(
