@@ -1,62 +1,69 @@
 # Bogeyboard
 
-Personal golf dashboard: scrapes your own round history from Garmin Connect (Approach watch scorecards + shot data) and TheGrint (pre-Garmin history) into local Parquet tables, displayed in a Streamlit app.
+Personal golf dashboard: downloads your round history from Garmin Connect (Approach watch scorecards + shot data) and TheGrint (older rounds) into local files, then shows them in a dashboard in your web browser.
 
-## Setup
+No programming knowledge needed — set it up once, then just double-click to open your dashboard and run two commands when you want to import new scores.
 
-Requires [uv](https://docs.astral.sh/uv/).
+## Setup — Mac
 
-```bash
-uv sync
+One-time setup, about 10 minutes:
+
+1. **Install Python** — go to [python.org/downloads](https://www.python.org/downloads/), download the latest version for macOS (**3.12 or newer is required**), and run the installer. Accept all defaults.
+2. **Get the Bogeyboard folder** onto your computer (e.g. copy it into `Documents`).
+3. **Open Terminal** (press `Cmd + Space`, type `Terminal`, press Enter).
+4. In Terminal, go to the folder and make the launcher executable. Type these two lines, replacing the folder path with where you put it, pressing Enter after each:
+   ```bash
+   cd ~/Documents/bogeyboard
+   chmod +x start_mac.command
+   ```
+5. **Double-click `start_mac.command`** in Finder. The first time, it installs everything it needs (a few minutes). After that it starts instantly, and your browser opens the dashboard at `http://localhost:8501`.
+
+From now on: **double-click `start_mac.command` whenever you want to see your stats.** Close the Terminal window when you're done.
+
+## Setup — Windows
+
+One-time setup, about 10 minutes:
+
+1. **Install Python** — go to [python.org/downloads](https://www.python.org/downloads/), download the latest version for Windows (**3.12 or newer is required**), and run the installer. **Important:** tick the box that says "Add Python to PATH" on the first installer screen.
+2. **Get the Bogeyboard folder** onto your computer (e.g. copy it into `Documents`).
+3. Open that folder and **double-click `start_windows.bat`**.
+   - If Windows SmartScreen shows a warning, click "More info" → "Run anyway".
+   - The first time, it installs everything it needs (a few minutes).
+   - Your browser opens the dashboard at `http://localhost:8501`.
+
+From now on: **double-click `start_windows.bat` whenever you want to see your stats.**
+
+## Connecting your accounts
+
+### Garmin Connect
+
+1. Make sure the dashboard is closed, then open Terminal (Mac) or Command Prompt (Windows) **in the Bogeyboard folder**:
+   - Mac: in Finder, right-click the Bogeyboard folder → "New Terminal at Folder" (or use `cd` as above)
+   - Windows: click the address bar in File Explorer, type `cmd`, press Enter
+2. Run:
+
+   ```
+   python fetch_garmin.py
+   ```
+
+   Mac users may need `python3 fetch_garmin.py` instead.
+3. Enter your Garmin email and password when asked (and an MFA code if you use one).
+
+The first sync downloads your entire shot history; later runs only fetch new rounds. When a login expires (~once a year), the app will offer to save your credentials so future logins are automatic.
+
+### TheGrint
+
+Same steps, but run:
+
+```
+python fetch_grint.py
 ```
 
-## Data sources
+This imports rounds from before you had your Garmin watch. Rounds you tracked in both places are handled automatically — no duplicates.
 
-### Garmin Connect — `fetch_garmin.py`
+## Credentials (optional)
 
-Downloads all golf rounds from your Garmin account using the unofficial `garminconnect` API. Works with auto shot detection (Approach watches) and CT10 sensors.
-
-```bash
-# Incremental sync (default): fetches only rounds newer than what's stored
-uv run python fetch_garmin.py
-
-# Re-fetch everything from scratch
-uv run python fetch_garmin.py --full
-
-# Only fetch rounds played after a date
-uv run python fetch_garmin.py --since 2026-06-01
-```
-
-First run prompts for email/password (and MFA code if enabled). Tokens are cached at `~/.garminconnect` and valid for roughly a year — subsequent runs need no login. If a run fails partway (e.g. rate limited), just rerun it; completed rounds are skipped and failed ones retried.
-
-### TheGrint — `fetch_grint.py`
-
-Scrapes round history from thegrint.com to fill in pre-Garmin rounds. Imports rounds **before the earliest Garmin round** by default so overlapping rounds aren't double-counted. Combined scores and practice rounds are skipped automatically.
-
-```bash
-# Import everything before your earliest Garmin round
-uv run python fetch_grint.py
-
-# Or with an explicit cutoff date (YYYY-MM-DD)
-uv run python fetch_grint.py --cutoff 2021-08-14
-
-# Re-fetch all Grint rounds, replacing previously imported ones
-uv run python fetch_grint.py --full
-```
-
-First run prompts for TheGrint credentials; session cookies are cached at `~/.thegrint_session.json`. Reruns skip rounds already imported unless `--full` is given. Add `--debug` for login diagnostics.
-
-> Both scrapers use unofficial/private interfaces and may break if the sites change. All requests are your own account data, rate-limited with small delays between requests.
-
-## Credentials
-
-Both scrapers cache their session after login (Garmin tokens at `~/.garminconnect`, valid ~1 year; Grint cookies at `~/.thegrint_session.json`). When those expire, credentials are resolved in this order:
-
-1. Environment variables: `GARMIN_EMAIL` / `GARMIN_PASSWORD` and `GRINT_EMAIL` / `GRINT_PASSWORD`
-2. `~/.bogeyboard_login.json`
-3. Interactive prompt — after a successful manual login you'll be offered to save the credentials to that file
-
-You can also create `~/.bogeyboard_login.json` yourself:
+Both apps save their login sessions after you sign in once. If you'd rather never be prompted at all — even when sessions expire — store your credentials in a file called `.bogeyboard_login.json` in your home folder (`~` on Mac, `C:\Users\YourName` on Windows):
 
 ```json
 {
@@ -73,38 +80,62 @@ You can also create `~/.bogeyboard_login.json` yourself:
 }
 ```
 
-Omit either service if you don't use it. The file is written with `0600` permissions when saved by the scrapers. Note: passwords are stored in plain text — keep the file private.
+Create it with TextEdit (Mac) or Notepad (Windows); make sure it's saved as plain text with exactly that name starting with a dot. Omit either service if you don't use it. Passwords are stored in plain text — keep the file private. Environment variables `GARMIN_EMAIL` / `GARMIN_PASSWORD` and `GRINT_EMAIL` / `GRINT_PASSWORD` override the file if you prefer that route.
+
+> Both scrapers talk to unofficial/private interfaces and may break if the websites change. All requests are your own account data, rate-limited with small delays between requests.
 
 ## Data output
 
-Everything lands in `data/`:
+Everything lands in the `data` folder inside Bogeyboard:
 
 | File | Contents |
 | --- | --- |
 | `rounds.parquet` | One row per round: id, source (`garmin`/`grint`), date, course, score, to_par, tee box, slope/rating |
-| `holes.parquet` | Per-hole rows: score, putts, penalties, fairway code (Grint only) |
+| `holes.parquet` | Per-hole rows: score, putts, penalties, fairway code (Grint only), pin position (Garmin only) |
 | `shots.parquet` | Shot-by-shot GPS data (Garmin only): club, lie, start/end coordinates, distance, shot type/source |
-| `raw/*.json`, `raw/grint/*.html` | Unparsed API responses per round, kept for debugging |
-| `courses.json` | Cached course/tee par data from TheGrint |
+| `raw/*.json`, `raw/grint/*.html` | Unparsed responses per round, kept for debugging |
+| `courses.json` | Cached course/tee data from TheGrint |
 
-Delete any `.parquet` file and rerun the corresponding scraper (with `--full`) to rebuild it from scratch.
+## Refreshing your stats
 
-## Dashboard
+After playing a round:
 
-```bash
-uv run streamlit run app.py
+1. Double-click the launcher so the dashboard is running
+2. In Terminal/Command Prompt (in the Bogeyboard folder):
+   ```
+   python fetch_garmin.py
+   python fetch_grint.py
+   ```
+3. Refresh your browser tab
+
+To force a complete re-download of one source:
+
+```
+python fetch_garmin.py --full
+python fetch_grint.py --full
 ```
 
-Multi-page Streamlit app fed by both sources (Grint rounds appear as historical context alongside Garmin data):
+Other options: `--since YYYY-MM-DD` and `--cutoff YYYY-MM-DD` limit what gets fetched; `--debug` prints login diagnostics.
+
+## Dashboard pages
 
 | Page | Contents |
 | --- | --- |
 | Overview | Handicap index, avg score, FIR%/GIR% KPIs; rounds bar chart with best-8-of-last-20 differentials highlighted |
 | Scoring | Average score by hole number, hole par, and yardage bucket |
-| Putting | Putt-count distribution donut, putts by GIR, last-20-rounds trend |
-| Ball striking | FIR%, GIR%, and scrambling trends over time |
-| Clubs | Average distance per club from shot tracking |
+| Putting | Putt-count distribution donut, putts by GIR, putts-per-round bars |
+| Ball striking | Driving misses (left/right/hit/other) and approach outcomes as 100% stacked bars, plus scrambling trend |
+| Clubs | Distance distribution curves per club with outlier trimming, average distances |
 | Data | Raw rounds/holes/shots tables with round filters |
 
-Derived stats (handicap differentials, FIR, GIR, scrambling) are computed in `stats.py` from the Parquet tables — FIR/GIR come from decoded TheGrint fairway codes or exact Garmin shot lies depending on the source.
+Sidebar filters (course, year, round window, handicap rounds) apply across the chart pages; your club selection and trim preferences are remembered between sessions.
 
+Derived stats (handicap differentials, FIR, GIR, scrambling) are computed in `stats.py` from the data files.
+
+---
+
+## Developer notes
+
+This is a plain Python project. Install dependencies however you like — e.g. `pip install -r requirements.txt`, or with [uv](https://docs.astral.sh/uv/) via `uv sync` using the bundled `pyproject.toml`. Requires Python 3.12+ (the garminconnect dependency enforces this).
+
+Run scrapers with `uv run python <script>` or from an activated environment. Useful extras: `fetch_grint.py --debug` prints Grint login diagnostics; raw API responses are kept under `data/raw/` for debugging parser issues.
