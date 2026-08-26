@@ -19,7 +19,7 @@ if last20.height == 0:
     st.stop()
 
 last20_sorted = last20.sort("date")
-hist = stats.handicap_history().filter(pl.col("round_id").is_in(last20["round_id"])).sort("date")
+hist = stats.handicap_history().filter(pl.col("round_id").is_in(last20["round_id"].to_list())).sort("date")
 
 # Handicap Index progression chart
 if hist.height:

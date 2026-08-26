@@ -439,7 +439,7 @@ def _handicap_flagged(rounds: pl.DataFrame) -> pl.DataFrame:
         return rounds.with_columns(pl.lit(False).alias("counts"))
     best = eligible.sort("differential").head(k)
     return rounds.with_columns(
-        pl.col("round_id").is_in(best["round_id"]).alias("counts")
+        pl.col("round_id").is_in(best["round_id"].to_list()).alias("counts")
     )
 
 
