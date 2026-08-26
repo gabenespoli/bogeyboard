@@ -200,6 +200,64 @@ def parse_holes(detail: dict, round_id: int, pars_by_hole: dict[int, int]) -> li
     return rows
 
 
+def _compute_yardage(holes_rows: list[dict], shots_rows: list[dict]) -> list[dict]:
+    """Infer yardage per hole from shot GPS data.
+    Primary: tee -> first green shot. Fallback: sum of non-putt shots.
+    """
+    if not shots_rows:
+        return holes_rows
+
+    import math
+
+    def haversine(lat1, lon1, lat2, lon2):
+        R = 6371000
+        phi1, phi2 = math.radians(lat1), math.radians(lat2)
+        dphi = math.radians(lat2 - lat1)
+        dlambda = math.radians(lon2 - lon1)
+        a = math.sin(dphi / 2) ** 2 + math.cos(phi1) * math.cos(phi2) * math.sin(dlambda / 2) ** 2
+        return 2 * R * math.asin(math.sqrt(a))
+
+    # Group shots by hole
+    shots_by_hole: dict[int, list[dict]] = {}
+    for s in shots_rows:
+        hn = s.get("hole_number")
+        if hn is not None:
+            shots_by_hole.setdefault(hn, []).append(s)
+
+    # Compute per hole
+    hole_yardage: dict[int, int] = {}
+    for hn, shots in shots_by_hole.items():
+        shots_sorted = sorted(shots, key=lambda x: x.get("shot_number") or 0)
+
+        # Method 1: tee to first green
+        tee_shot = next((s for s in shots_sorted if s.get("shot_number") == 1), None)
+        green_shot = next((s for s in shots_sorted if s.get("lie") == "Green"), None)
+
+        yds = None
+        if tee_shot and green_shot:
+            slat, slon = tee_shot.get("start_lat"), tee_shot.get("start_lon")
+            glat, glon = green_shot.get("lat"), green_shot.get("lon")
+            if None not in (slat, slon, glat, glon):
+                yds = round(haversine(slat, slon, glat, glon) / 0.9144)
+
+        # Method 2: sum of non-putt shots
+        if yds is None:
+            non_putt = [s for s in shots_sorted if s.get("shot_type") != "PUTT" and s.get("distance_m")]
+            if non_putt:
+                yds = round(sum(s["distance_m"] for s in non_putt) / 0.9144)
+
+        if yds is not None:
+            hole_yardage[hn] = yds
+
+    # Apply to holes
+    for h in holes_rows:
+        hn = h["hole_number"]
+        if hn in hole_yardage:
+            h["yardage"] = hole_yardage[hn]
+
+    return holes_rows
+
+
 def parse_shots(shot_data: dict, round_id: int) -> list[dict]:
     clubs = {
         c["id"]: c.get("name")
@@ -299,6 +357,8 @@ def fetch_all(full: bool, since: str | None) -> None:
 
             holes_rows = parse_holes(detail, rid, pars_by_hole)
             shots_rows = parse_shots(raw_shots, rid) if raw_shots else []
+
+            holes_rows = _compute_yardage(holes_rows, shots_rows)
 
             (RAW_DIR / f"{rid}.json").write_text(
                 json.dumps({"summary": rnd, "detail": detail, "shots": raw_shots}, default=str)

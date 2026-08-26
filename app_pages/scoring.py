@@ -76,6 +76,6 @@ if with_yards.height:
     )
 else:
     st.caption(
-        "Yardage chart needs hole lengths — rerun `uv run python fetch_grint.py` "
-        "after the latest update to backfill yardages."
+        "Yardage chart needs hole lengths. Grint rounds get yardage from the API; "
+        "Garmin rounds infer it from shot GPS. Run a sync to populate."
     )

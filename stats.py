@@ -1,5 +1,7 @@
 """Derived golf stats from the Parquet tables, shared by all dashboard pages."""
 
+import math
+
 import polars as pl
 import streamlit as st
 
@@ -15,6 +17,88 @@ HOLE19_TEE_CODES = {
     "left": "miss_left",
     "right": "miss_right",
 }
+
+
+def _haversine(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
+    """Distance in meters between two lat/lon points."""
+    R = 6371000
+    phi1, phi2 = math.radians(lat1), math.radians(lat2)
+    dphi = math.radians(lat2 - lat1)
+    dlambda = math.radians(lon2 - lon1)
+    a = math.sin(dphi / 2) ** 2 + math.cos(phi1) * math.cos(phi2) * math.sin(dlambda / 2) ** 2
+    return 2 * R * math.asin(math.sqrt(a))
+
+
+@st.cache_data(ttl=600)
+def _inferred_yardage_cache() -> pl.DataFrame:
+    """Per (course, hole, tee) yardage inferred from Garmin shot GPS.
+    Primary: tee -> first green shot distance. Fallback: sum of non-putt shots.
+    """
+    rounds = load_rounds()
+    holes = load_holes()
+    shots = load_shots()
+    if shots.height == 0:
+        return pl.DataFrame(
+            schema={
+                "course_name": pl.String,
+                "tee_box": pl.String,
+                "hole_number": pl.UInt8,
+                "par": pl.UInt8,
+                "inferred_yardage": pl.UInt16,
+            }
+        )
+
+    garmin_rounds = rounds.filter(pl.col("source") == "garmin").select(
+        "round_id", "course_name", "tee_box"
+    )
+    garmin_holes = holes.filter(pl.col("source") == "garmin").select(
+        "round_id", "hole_number", "par"
+    )
+    gh = garmin_holes.join(garmin_rounds, on="round_id", how="inner")
+
+    # Method 1: tee to first green (most accurate = actual hole length)
+    tee_shots = shots.filter(pl.col("shot_number") == 1).select(
+        "round_id", "hole_number", "start_lat", "start_lon"
+    )
+    green_shots = (
+        shots.filter(pl.col("lie") == "Green")
+        .sort("shot_number")
+        .group_by("round_id", "hole_number")
+        .first()
+        .select("round_id", "hole_number", "lat", "lon")
+    )
+    tee_to_green = tee_shots.join(green_shots, on=["round_id", "hole_number"], how="inner")
+    tee_to_green = tee_to_green.filter(
+        pl.col("start_lat").is_not_null() & pl.col("lat").is_not_null()
+    )
+    tee_to_green = tee_to_green.with_columns(
+        pl.struct("start_lat", "start_lon", "lat", "lon")
+        .map_elements(
+            lambda x: round(_haversine(x["start_lat"], x["start_lon"], x["lat"], x["lon"]) / 0.9144)
+        )
+        .alias("tee_to_green_yds")
+    )
+
+    # Method 2: sum of non-putt shot distances (fallback)
+    sum_shots = (
+        shots.filter(pl.col("shot_type") != "PUTT")
+        .group_by("round_id", "hole_number")
+        .agg((pl.col("distance_m").sum() / 0.9144).round(0).alias("sum_method_yds"))
+    )
+
+    # Combine: prefer tee-to-green, fallback to sum
+    inferred = gh.join(tee_to_green.select("round_id", "hole_number", "tee_to_green_yds"), on=["round_id", "hole_number"], how="left")
+    inferred = inferred.join(sum_shots, on=["round_id", "hole_number"], how="left")
+    inferred = inferred.with_columns(
+        pl.coalesce("tee_to_green_yds", "sum_method_yds").cast(pl.UInt16).alias("inferred_yardage")
+    )
+
+    # Aggregate per (course, tee, hole, par) using median for consistency
+    return (
+        inferred.group_by("course_name", "tee_box", "hole_number", "par")
+        .agg(pl.col("inferred_yardage").median().cast(pl.UInt16).alias("inferred_yardage"))
+        .sort("course_name", "tee_box", "hole_number")
+    )
 
 
 @st.cache_data(ttl=600)
@@ -133,6 +217,16 @@ def enriched_holes() -> pl.DataFrame:
             pl.lit(None, dtype=pl.Boolean).alias("fir_garmin"),
             pl.lit(None, dtype=pl.Boolean).alias("gir_garmin"),
         )
+
+    # Join inferred yardage for Garmin holes missing yardage
+    inferred = _inferred_yardage_cache()
+    if inferred.height:
+        rounds_with_course = load_rounds().select("round_id", "course_name", "tee_box")
+        h = h.join(rounds_with_course, on="round_id", how="left")
+        h = h.join(inferred, on=["course_name", "tee_box", "hole_number", "par"], how="left")
+        h = h.with_columns(
+            pl.coalesce("yardage", "inferred_yardage").alias("yardage")
+        ).drop("inferred_yardage")
 
     return h.with_columns(
         pl.coalesce("fir_garmin", "fir_grint", "fir_hole19").alias("fir"),
