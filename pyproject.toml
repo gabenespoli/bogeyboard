@@ -11,4 +11,5 @@ dependencies = [
     "polars>=1.0",
     "requests>=2.34.2",
     "streamlit>=1.50",
+    "watchdog>=6.0.0",
 ]
