@@ -5,11 +5,8 @@ import streamlit as st
 import stats
 from filters import sidebar_filters, add_x_labels
 
-st.title("Ball striking")
-st.caption(
-    "Bars count tee-shot misses (driving) and greens (approach) per round; lines show percentage on the right axis. "
-    "Grint-era scrambling is approximated from scores and putts."
-)
+st.title("Driving")
+st.caption("Tee-shot misses per round; lines show fairway % on the right axis.")
 
 stats.require_data()
 
@@ -30,17 +27,8 @@ DRIVING_COLORS = {
     "miss_right": "#f38336",
     "miss_other": "#9e9e9e",
 }
-APPROACH_COLORS = {
-    "hit_reg": "#5c8a1e",
-    "hit_noreg": "#a7cf3f",
-    "miss_left": "#b00004",
-    "miss_right": "#f38336",
-    "miss_other": "#9e9e9e",
-}
 LINE_COLOR = "#1c1c1c"
-
 OUTCOME_ORDER = ["hit", "miss_right", "miss_other", "miss_left"]
-APPROACH_ORDER = ["hit_reg", "hit_noreg", "miss_right", "miss_other", "miss_left"]
 
 
 def stacked_chart(
@@ -80,10 +68,9 @@ def stacked_chart(
     )
 
 
-st.subheader("Driving")
 outcomes = stats.tee_shot_outcomes(round_ids or None)
 if outcomes.height:
-    st.altair_chart(stacked_chart(outcomes, OUTCOME_ORDER, DRIVING_COLORS))
+    st.altair_chart(stacked_chart(outcomes, OUTCOME_ORDER, DRIVING_COLORS), width="stretch")
 else:
     st.caption("No directional tee-shot data in this range.")
 fir_only = summary.filter(pl.col("fir_pct").is_not_null())
@@ -93,24 +80,6 @@ if fir_only.height and not outcomes.height:
             **x_enc,
             y=alt.Y("fir_pct:Q", title="FIR %", scale=alt.Scale(domain=[0, 100])),
             tooltip=["date", "course_name", "fir_pct"],
-        )
-    )
-
-st.subheader("Approach")
-approach_outcomes = stats.approach_shot_outcomes(round_ids or None)
-if approach_outcomes.height:
-    st.altair_chart(stacked_chart(approach_outcomes, APPROACH_ORDER, APPROACH_COLORS))
-    st.caption("Hit = approach finished on the green (or holed out). Reg = green reached in par − 2 strokes.")
-else:
-    st.caption("No approach-shot data in this range.")
-
-scr_df = summary.filter(pl.col("scramble_pct").is_not_null())
-if scr_df.height:
-    st.subheader("Scrambling % (missed-green saves)")
-    st.altair_chart(
-        alt.Chart(scr_df).mark_line(point=True, color=LINE_COLOR).encode(
-            **x_enc,
-            y=alt.Y("scramble_pct:Q", title="Scrambling %", scale=alt.Scale(domain=[0, 100])),
-            tooltip=["date", "course_name", "scramble_pct"],
-        )
+        ),
+        width="stretch",
     )
