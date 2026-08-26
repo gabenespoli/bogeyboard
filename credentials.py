@@ -1,16 +1,16 @@
 """Credential storage for scrapers.
 
 Resolution order per service:
-1. Environment variables (GARMIN_EMAIL/GARMIN_PASSWORD, GRINT_EMAIL/GRINT_PASSWORD)
-2. ~/.bogeyboard_login.json  ->  {"logins": {"<service>": {"email": ..., "password": ...}}}
+1. Environment variables (GARMIN_EMAIL/GARMIN_PASSWORD, GRINT_EMAIL/GRINT_PASSWORD,
+   HOLE19_EMAIL/HOLE19_PASSWORD)
+2. ~/.bogeyboard/login.json  ->  {"logins": {"<service>": {"email": ..., "password": ...}}}
 """
 
 import json
 import os
 import stat
-from pathlib import Path
 
-LOGIN_FILE = Path("~/.bogeyboard_login.json").expanduser()
+import paths
 
 ENV_KEYS = {
     "garmin": ("GARMIN_EMAIL", "GARMIN_PASSWORD"),
@@ -20,8 +20,9 @@ ENV_KEYS = {
 
 
 def load_logins() -> dict:
+    paths.ensure_layout()
     try:
-        return json.loads(LOGIN_FILE.read_text())
+        return json.loads(paths.LOGIN_FILE.read_text())
     except (FileNotFoundError, json.JSONDecodeError):
         return {}
 
@@ -37,7 +38,8 @@ def get_login(service: str) -> tuple[str, str] | None:
 
 
 def save_login(service: str, email: str, password: str) -> None:
+    paths.ensure_layout()
     data = load_logins()
     data.setdefault("logins", {})[service] = {"email": email, "password": password}
-    LOGIN_FILE.write_text(json.dumps(data, indent=1))
-    LOGIN_FILE.chmod(stat.S_IRUSR | stat.S_IWUSR)
+    paths.LOGIN_FILE.write_text(json.dumps(data, indent=1))
+    paths.LOGIN_FILE.chmod(stat.S_IRUSR | stat.S_IWUSR)

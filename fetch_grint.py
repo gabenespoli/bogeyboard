@@ -11,18 +11,18 @@ import json
 import re
 import sys
 import time
-from pathlib import Path
 
 import polars as pl
 import requests
 from bs4 import BeautifulSoup
 
 import credentials
+import paths
 from fetch_garmin import HOLES_SCHEMA, ROUNDS_SCHEMA, load_or_empty
 
 BASE = "https://thegrint.com"
-SESSION_FILE = Path("~/.thegrint_session.json").expanduser()
-DATA_DIR = Path(__file__).resolve().parent / "data"
+SESSION_FILE = paths.GRINT_SESSION_FILE
+DATA_DIR = paths.DATA_DIR
 RAW_DIR = DATA_DIR / "raw" / "grint"
 COURSES_CACHE = DATA_DIR / "courses.json"
 ROUNDS_PATH = DATA_DIR / "rounds.parquet"
@@ -395,6 +395,7 @@ def main() -> None:
     )
     args = parser.parse_args()
     HEADLESS = args.headless
+    paths.ensure_layout()
 
     session = get_session(debug=args.debug)
 

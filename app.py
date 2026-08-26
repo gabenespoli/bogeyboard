@@ -1,5 +1,9 @@
 import streamlit as st
 
+import paths
+
+paths.ensure_layout()
+
 st.set_page_config(page_title="Bogeyboard", layout="wide")
 
 page = st.navigation(

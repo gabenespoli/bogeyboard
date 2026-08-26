@@ -3,7 +3,9 @@
 import polars as pl
 import streamlit as st
 
-DATA_DIR = __import__("pathlib").Path(__file__).resolve().parent / "data"
+import paths
+
+DATA_DIR = paths.DATA_DIR
 
 GRINT_FAIRWAY_HIT_CODE = "3"
 HOLE19_FAIRWAY_HIT_CODES = {"center", "target"}

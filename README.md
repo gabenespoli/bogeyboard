@@ -84,7 +84,7 @@ This imports all rounds from your Hole19 account (via the hole19golf.com website
 
 ## Credentials (optional)
 
-Signing in on the Accounts page saves passwords there by default. Each app also saves its login session after you sync once, so most syncs never need a password. If you'd rather manage this yourself, store credentials in a file called `.bogeyboard_login.json` in your home folder (`~` on Mac, `C:\Users\YourName` on Windows):
+Signing in on the Accounts page saves passwords there by default. Each app also saves its login session after you sync once, so most syncs never need a password. If you'd rather manage this yourself, store credentials in `~/.bogeyboard/login.json` in your home folder (`~` on Mac, `C:\Users\YourName` on Windows):
 
 ```json
 {
@@ -105,22 +105,33 @@ Signing in on the Accounts page saves passwords there by default. Each app also 
 }
 ```
 
-Create it with TextEdit (Mac) or Notepad (Windows); make sure it's saved as plain text with exactly that name starting with a dot. Omit any service you don't use. Passwords are stored in plain text — keep the file private. Environment variables `GARMIN_EMAIL` / `GARMIN_PASSWORD`, `GRINT_EMAIL` / `GRINT_PASSWORD` and `HOLE19_EMAIL` / `HOLE19_PASSWORD` override the file if you prefer that route.
+Create it with TextEdit (Mac) or Notepad (Windows); make sure it's saved as plain text and named exactly `login.json`. Omit any service you don't use. Passwords are stored in plain text — keep the file private. Environment variables `GARMIN_EMAIL` / `GARMIN_PASSWORD`, `GRINT_EMAIL` / `GRINT_PASSWORD` and `HOLE19_EMAIL` / `HOLE19_PASSWORD` override the file if you prefer that route.
 
 > Both scrapers talk to unofficial/private interfaces and may break if the websites change. All requests are your own account data, rate-limited with small delays between requests.
 
-## Data output
+## Data — where your golf lives
 
-Everything lands in the `data` folder inside Bogeyboard:
+Everything Bogeyboard stores sits in **`~/.bogeyboard`** in your home folder (`~` on Mac, `C:\Users\YourName` on Windows) — not inside the app folder. That means updating or replacing the app folder never touches your data.
 
-| File | Contents |
+| Path | Contents |
 | --- | --- |
-| `rounds.parquet` | One row per round: id, source (`garmin`/`grint`/`hole19`), date, course, score, to_par, tee box, slope/rating |
-| `holes.parquet` | Per-hole rows: score, putts, penalties, fairway code (Grint: numeric code, Hole19: `center`/`target`/`left`/`right`), pin position (Garmin only) |
-| `shots.parquet` | Shot-by-shot GPS data (Garmin only): club, lie, start/end coordinates, distance, shot type/source |
-| `raw/*.json`, `raw/grint/*.html`, `raw/hole19/*.html` | Unparsed responses per round, kept for debugging |
-| `logs/*.log` | Output of dashboard-triggered syncs, one file per service |
-| `courses.json` | Cached course/tee data from TheGrint |
+| `~/.bogeyboard/data/rounds.parquet` | One row per round: id, source (`garmin`/`grint`/`hole19`), date, course, score, to_par, tee box, slope/rating |
+| `~/.bogeyboard/data/holes.parquet` | Per-hole rows: score, putts, penalties, fairway code (Grint: numeric code, Hole19: `center`/`target`/`left`/`right`), pin position (Garmin only) |
+| `~/.bogeyboard/data/shots.parquet` | Shot-by-shot GPS data (Garmin only): club, lie, start/end coordinates, distance, shot type/source |
+| `~/.bogeyboard/data/raw/*.json`, `raw/grint/*.html`, `raw/hole19/*.html` | Unparsed responses per round, kept for debugging |
+| `~/.bogeyboard/data/logs/*.log` | Output of dashboard-triggered syncs and updates |
+| `~/.bogeyboard/data/courses.json` | Cached course/tee data from TheGrint |
+| `~/.bogeyboard/login.json` | Saved passwords (created when you tick "Remember password") |
+| `~/.bogeyboard/config.json` | Dashboard preferences (club selection etc.) |
+
+If you used an older version of Bogeyboard, existing files are moved here automatically on first launch.
+
+## Updating the app
+
+On the **Accounts** page, the **App version** card shows whether an update is available:
+
+- Click **Check for updates**, then **Update now** — new code is pulled from GitHub and installed in place; the app reloads by itself. If dependencies changed, they're reinstalled automatically.
+- If you originally downloaded a ZIP (no update history in the folder), the card links to the latest ZIP instead. Replacing the app folder is safe: your data and sign-ins live in `~/.bogeyboard`.
 
 ## Refreshing your stats
 

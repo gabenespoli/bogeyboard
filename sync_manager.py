@@ -14,11 +14,12 @@ import subprocess
 import sys
 from pathlib import Path
 
-REPO_DIR = Path(__file__).resolve().parent
-DATA_DIR = REPO_DIR / "data"
-STATE_DIR = DATA_DIR / ".sync"
-LOG_DIR = DATA_DIR / "logs"
-STATUS_FILE = DATA_DIR / "sync_status.json"
+import paths
+
+REPO_DIR = paths.REPO_DIR
+STATE_DIR = paths.DATA_DIR / ".sync"
+LOG_DIR = paths.DATA_DIR / "logs"
+STATUS_FILE = paths.DATA_DIR / "sync_status.json"
 
 SERVICES = ("garmin", "grint", "hole19")
 
@@ -183,6 +184,7 @@ def main() -> None:
     )
     parser.add_argument("--full", action="store_true", help="pass --full to each fetch script")
     args = parser.parse_args()
+    paths.ensure_layout()
 
     services = args.services or list(SERVICES)
     failures = []

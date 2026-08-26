@@ -1,20 +1,21 @@
-"""Persistent user settings stored at ~/.bogeyboard.json."""
+"""Persistent user settings stored at ~/.bogeyboard/config.json."""
 
 import json
-from pathlib import Path
 
-SETTINGS_FILE = Path("~/.bogeyboard.json").expanduser()
+import paths
 
 
 def load_settings() -> dict:
+    paths.ensure_layout()
     try:
-        return json.loads(SETTINGS_FILE.read_text())
+        return json.loads(paths.SETTINGS_FILE.read_text())
     except (FileNotFoundError, json.JSONDecodeError):
         return {}
 
 
 def save_settings(settings: dict) -> None:
-    SETTINGS_FILE.write_text(json.dumps(settings, indent=1))
+    paths.ensure_layout()
+    paths.SETTINGS_FILE.write_text(json.dumps(settings, indent=1))
 
 
 def update_setting(key: str, value) -> None:

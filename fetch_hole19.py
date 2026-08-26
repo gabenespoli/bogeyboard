@@ -13,18 +13,18 @@ import json
 import re
 import sys
 import time
-from pathlib import Path
 
 import polars as pl
 import requests
 from bs4 import BeautifulSoup
 
 import credentials
+import paths
 from fetch_garmin import HOLES_SCHEMA, ROUNDS_SCHEMA, load_or_empty
 
 BASE = "https://www.hole19golf.com"
-SESSION_FILE = Path("~/.hole19_session.json").expanduser()
-DATA_DIR = Path(__file__).resolve().parent / "data"
+SESSION_FILE = paths.HOLE19_SESSION_FILE
+DATA_DIR = paths.DATA_DIR
 RAW_DIR = DATA_DIR / "raw" / "hole19"
 
 FETCH_DELAY_S = 1.0
@@ -417,6 +417,7 @@ def main() -> None:
     )
     args = parser.parse_args()
     HEADLESS = args.headless
+    paths.ensure_layout()
 
     session = get_session(debug=args.debug)
 

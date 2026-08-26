@@ -1,30 +1,29 @@
 import time
-from pathlib import Path
 
 import polars as pl
 import streamlit as st
 
 import credentials
+import paths
 import stats
 import sync_manager
-
-GARMIN_TOKEN_DIR = Path("~/.garminconnect").expanduser()
+import updater
 
 SERVICE_META = {
     "garmin": (
         "Garmin Connect",
         "Rounds and shot-by-shot shot data from your Garmin watch.",
-        lambda: GARMIN_TOKEN_DIR.exists(),
+        lambda: paths.GARMIN_TOKEN_STORE.exists(),
     ),
     "grint": (
         "TheGrint",
         "Historical rounds from TheGrint.",
-        lambda: Path("~/.thegrint_session.json").expanduser().exists(),
+        lambda: paths.GRINT_SESSION_FILE.exists(),
     ),
     "hole19": (
         "Hole19",
         "All rounds tracked in the Hole19 app.",
-        lambda: Path("~/.hole19_session.json").expanduser().exists(),
+        lambda: paths.HOLE19_SESSION_FILE.exists(),
     ),
 }
 
@@ -76,21 +75,28 @@ st.title("Accounts & syncing")
 statuses = {s: sync_manager.status(s) for s in sync_manager.SERVICES}
 running = {s for s, v in statuses.items() if v["running"]}
 any_running = bool(running)
+update = updater.status()
+update_running = update["running"]
+busy = any_running or update_running
 
-# Clear cached data when a sync has finished since the last render, so chart pages refresh.
+# Clear cached data when a sync or update has finished since the last render.
 seen_finished = st.session_state.setdefault("_seen_finished", {})
-for svc, v in statuses.items():
-    fin = v["finished_at"]
-    if fin and svc in seen_finished and seen_finished[svc] != fin:
+for key, finished in [
+    *((f"sync_{s}", v["finished_at"]) for s, v in statuses.items()),
+    ("update", update["finished_at"]),
+]:
+    if finished and key in seen_finished and seen_finished[key] != finished:
         st.cache_data.clear()
-    seen_finished[svc] = fin
+    seen_finished[key] = finished
 
 with st.container(border=True):
     top = st.columns([1, 3])
-    can_sync = not any_running and any(_has_creds(s) for s in sync_manager.SERVICES)
+    can_sync = not busy and any(_has_creds(s) for s in sync_manager.SERVICES)
     if top[0].button("Sync all", type="primary", disabled=not can_sync, use_container_width=True):
         _launch(list(sync_manager.SERVICES))
-    if any_running:
+    if update_running:
+        top[1].info("Installing an app update — syncing is paused until it finishes.")
+    elif any_running:
         top[1].info(f"Syncing: {', '.join(sorted(running))} — this page updates automatically.")
     else:
         top[1].caption(
@@ -135,13 +141,13 @@ for service, (label, blurb, _) in SERVICE_META.items():
         cols = st.columns(2)
         if cols[0].button(
             "Sync now",
-            disabled=any_running or not _has_creds(service),
+            disabled=busy or not _has_creds(service),
             use_container_width=True,
             key=f"sync_{service}",
         ):
             _launch([service])
         with cols[1].popover(
-            "Full re-sync", disabled=any_running or not _has_creds(service), use_container_width=True
+            "Full re-sync", disabled=busy or not _has_creds(service), use_container_width=True
         ):
             st.write(
                 f"Deletes the stored {label} rounds and downloads all of them again from scratch. "
@@ -162,6 +168,62 @@ for service, (label, blurb, _) in SERVICE_META.items():
             else:
                 st.caption(f"Last sync finished at {v['finished_at'][:16].replace('T', ' ')}.")
 
-if any_running:
+with st.container(border=True):
+    st.markdown("**App version**")
+
+    if not update["supported"]:
+        st.info(
+            f"This copy of Bogeyboard can't check for updates on its own. "
+            f"Download the latest version from [GitHub]({updater.ZIP_URL}) and replace this folder — "
+            "your data and saved sign-ins live outside the app folder, so nothing is lost."
+        )
+    else:
+        behind = update["commits_behind"]
+        commit = update["current_commit"] or "?"
+        if update_running:
+            st.info("Updating… the app reloads automatically when it finishes.")
+        elif behind is None:
+            st.caption(f"Version {commit} — couldn't reach GitHub to check for updates.")
+        elif behind == 0:
+            st.caption(f"Version {commit} — up to date.")
+        else:
+            st.warning(f"Version {commit} — {behind} update{'s' if behind != 1 else ''} available.")
+
+        cols = st.columns(2)
+        checked = update["checked_at"]
+        if cols[0].button(
+            "Check for updates",
+            disabled=busy,
+            use_container_width=True,
+            key="check_update",
+        ):
+            updater.status(refresh=True)
+            st.rerun()
+        if cols[1].button(
+            "Update now",
+            disabled=busy or not behind,
+            use_container_width=True,
+            key="run_update",
+        ):
+            err = updater.start_update()
+            if err:
+                st.error(err)
+            else:
+                st.rerun()
+
+        if update_running:
+            st.code(updater.log_tail() or "(working…)", language="text")
+        elif update["finished_at"]:
+            if update.get("interrupted"):
+                st.warning("The last update was interrupted — you can try again any time.")
+            elif update["exit_code"] not in (0, None):
+                tail = updater.log_tail(lines=5)
+                st.error(f"The last update failed. Log:\n\n```\n{tail}\n```")
+            else:
+                st.caption("Last update installed successfully.")
+        if checked:
+            st.caption(f"Last checked {checked[:16].replace('T', ' ')}.")
+
+if busy:
     time.sleep(3)
     st.rerun()

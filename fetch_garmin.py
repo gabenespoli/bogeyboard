@@ -22,12 +22,13 @@ from garminconnect import (
 )
 
 import credentials
+import paths
 
-DATA_DIR = Path(__file__).resolve().parent / "data"
+DATA_DIR = paths.DATA_DIR
 RAW_DIR = DATA_DIR / "raw"
 
 FETCH_DELAY_S = 1.0
-TOKEN_STORE = Path("~/.garminconnect").expanduser()
+TOKEN_STORE = paths.GARMIN_TOKEN_STORE
 
 # Set by main() when --headless is passed; the dashboard runs syncs headlessly.
 HEADLESS = False
@@ -125,7 +126,7 @@ def get_client(token_store: Path = TOKEN_STORE) -> Garmin:
     except GarminConnectConnectionError as e:
         sys.exit(f"Connection error: {e}")
 
-    if input("Save these credentials to ~/.bogeyboard_login.json? (y/n) ").strip().lower() == "y":
+    if input("Save these credentials to the Bogeyboard login file? (y/n) ").strip().lower() == "y":
         credentials.save_login("garmin", email, password)
         print(f"Credentials saved to {credentials.LOGIN_FILE}")
 
@@ -347,6 +348,7 @@ def main() -> None:
     )
     args = parser.parse_args()
     HEADLESS = args.headless
+    paths.ensure_layout()
     fetch_all(full=args.full, since=args.since)
 
 
