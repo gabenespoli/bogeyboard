@@ -746,6 +746,278 @@ def approach_shot_outcomes(round_ids: list[int] | None = None) -> pl.DataFrame:
     return df.group_by("round_id", "outcome").agg(pl.len().alias("n"))
 
 
+def driving_fir_by_yardage(round_ids: list[int] | None = None, bucket: int = 25) -> pl.DataFrame:
+    """FIR % per yardage bucket (hole yardage). Driving excludes par 3."""
+    holes = _filter_rounds(enriched_holes(), round_ids).filter(
+        pl.col("yardage").is_not_null() & (pl.col("yardage") > 0) & pl.col("fir").is_not_null() & pl.col("par").is_in([4, 5])
+    )
+    if holes.height == 0:
+        return pl.DataFrame(schema={"bucket": pl.Int64, "fir_pct": pl.Float64, "holes": pl.UInt32})
+    binned = holes.with_columns((pl.col("yardage").floordiv(bucket) * bucket).alias("bucket"))
+    return (
+        binned.group_by("bucket")
+        .agg(pl.col("fir").mean().mul(100).round(1).alias("fir_pct"), pl.len().alias("holes"))
+        .sort("bucket")
+    )
+
+
+def driving_outcomes_by_yardage(round_ids: list[int] | None = None, bucket: int = 25) -> pl.DataFrame:
+    """Per-hole driving outcome share per yardage bucket (for stacked chart)."""
+    holes = _filter_rounds(enriched_holes(), round_ids).filter(
+        pl.col("yardage").is_not_null() & (pl.col("yardage") > 0) & pl.col("par").is_in([4, 5])
+    )
+    if holes.height == 0:
+        return pl.DataFrame(schema={"bucket": pl.Int64, "outcome": pl.String, "n": pl.UInt32})
+    binned_holes = holes.with_columns((pl.col("yardage").floordiv(bucket) * bucket).alias("bucket")).select(
+        "round_id", "hole_number", "bucket", "source", "fairway", "pin_lat", "pin_lon"
+    )
+    rows: list[tuple[int, str]] = []
+    app_holes = binned_holes.filter(
+        pl.col("source").is_in(["grint", "hole19"]) & pl.col("fairway").is_not_null()
+    ).select("bucket", "source", "fairway")
+    for r in app_holes.iter_rows(named=True):
+        codes = HOLE19_TEE_CODES if r["source"] == "hole19" else GRINT_TEE_CODES
+        rows.append((r["bucket"], codes.get(str(r["fairway"]), "miss_other")))
+    garmin_holes = binned_holes.filter(pl.col("source") == "garmin").select("round_id", "hole_number", "bucket", "pin_lat", "pin_lon")
+    tee_shots = load_shots().join(garmin_holes, on=["round_id", "hole_number"], how="inner")
+    tee_shots = _filter_rounds(tee_shots, round_ids).filter(pl.col("shot_number") == 1)
+    import math as _math
+    for r in tee_shots.iter_rows(named=True):
+        b = r["bucket"]
+        if r["lie"] in ("Fairway", "Green"):
+            rows.append((b, "hit"))
+            continue
+        if None in (r["pin_lat"], r["start_lat"], r["start_lon"], r["lat"], r["lon"]):
+            rows.append((b, "miss_other"))
+            continue
+        lat_mid = _math.radians((r["start_lat"] + r["pin_lat"]) / 2)
+        ax = (r["pin_lon"] - r["start_lon"]) * _math.cos(lat_mid)
+        ay = r["pin_lat"] - r["start_lat"]
+        bx = (r["lon"] - r["start_lon"]) * _math.cos(lat_mid)
+        by = r["lat"] - r["start_lat"]
+        cross = ax * by - ay * bx
+        rows.append((b, "miss_left" if cross > 0 else "miss_right"))
+    if not rows:
+        return pl.DataFrame(schema={"bucket": pl.Int64, "outcome": pl.String, "n": pl.UInt32})
+    df = pl.DataFrame(rows, schema={"bucket": pl.Int64, "outcome": pl.String}, orient="row")
+    return df.group_by("bucket", "outcome").agg(pl.len().alias("n"))
+
+
+def gir_by_yardage(round_ids: list[int] | None = None, bucket: int = 25) -> pl.DataFrame:
+    """GIR % per yardage bucket (includes par 3s)."""
+    holes = _filter_rounds(enriched_holes(), round_ids).filter(
+        pl.col("yardage").is_not_null() & (pl.col("yardage") > 0) & pl.col("gir").is_not_null()
+    )
+    if holes.height == 0:
+        return pl.DataFrame(schema={"bucket": pl.Int64, "gir_pct": pl.Float64, "holes": pl.UInt32})
+    binned = holes.with_columns((pl.col("yardage").floordiv(bucket) * bucket).alias("bucket"))
+    return (
+        binned.group_by("bucket")
+        .agg(pl.col("gir").mean().mul(100).round(1).alias("gir_pct"), pl.len().alias("holes"))
+        .sort("bucket")
+    )
+
+
+def approach_hit_by_yardage(round_ids: list[int] | None = None, bucket: int = 25) -> pl.DataFrame:
+    """Approach shot hit % per yardage bucket (Garmin APPROACH shots, hit=Green or holed)."""
+    holes_yard = _filter_rounds(enriched_holes(), round_ids).select("round_id", "hole_number", "yardage").filter(pl.col("yardage").is_not_null() & (pl.col("yardage") > 0))
+    if holes_yard.height == 0:
+        return pl.DataFrame(schema={"bucket": pl.Int64, "hit_pct": pl.Float64, "approach_shots": pl.UInt32})
+    binned_holes = holes_yard.with_columns((pl.col("yardage").floordiv(bucket) * bucket).alias("bucket"))
+    shots = (
+        load_shots()
+        .filter(pl.col("shot_type") == "APPROACH")
+        .join(load_holes().filter(pl.col("source") == "garmin").select("round_id", "hole_number", "par", "pin_lat", "pin_lon"), on=["round_id", "hole_number"], how="inner")
+        .join(binned_holes, on=["round_id", "hole_number"], how="inner")
+        .sort("shot_number")
+    )
+    shots = _filter_rounds(shots, round_ids)
+    if shots.height == 0:
+        return pl.DataFrame(schema={"bucket": pl.Int64, "hit_pct": pl.Float64, "approach_shots": pl.UInt32})
+    last_shot = shots.group_by("round_id", "hole_number").agg(pl.col("shot_number").max().alias("_hole_last"))
+    shots = shots.join(last_shot, on=["round_id", "hole_number"], how="left")
+    import math as _math2
+    rows2: list[tuple[int, bool]] = []
+    for r in shots.iter_rows(named=True):
+        end_lie = r["lie"]
+        holed = False
+        if r["pin_lat"] is not None and r["lat"] is not None and r["lon"] is not None:
+            dy = (r["lat"] - r["pin_lat"]) * 111_320
+            dx = (r["lon"] - r["pin_lon"]) * 111_320 * _math2.cos(_math2.radians(r["lat"]))
+            holed = _math2.hypot(dy, dx) / 0.9144 <= 6
+        is_final = r["_hole_last"] == r["shot_number"]
+        hit = end_lie == "Green" or (holed and is_final)
+        rows2.append((r["bucket"], hit))
+    df2 = pl.DataFrame(rows2, schema={"bucket": pl.Int64, "hit": pl.Boolean}, orient="row")
+    return (
+        df2.group_by("bucket")
+        .agg(pl.col("hit").mean().mul(100).round(1).alias("hit_pct"), pl.len().alias("approach_shots"))
+        .sort("bucket")
+    )
+
+
+def driving_by_club(round_ids: list[int] | None = None, club_names: list[str] | None = None) -> pl.DataFrame:
+    """Per-club driving outcomes (Garmin tee shots only, par 4/5). Returns bucket=club."""
+    holes = _filter_rounds(enriched_holes(), round_ids).filter(pl.col("par").is_in([4, 5]))
+    if holes.height == 0:
+        return pl.DataFrame(schema={"club": pl.String, "outcome": pl.String, "n": pl.UInt32})
+    garmin_holes = holes.filter(pl.col("source") == "garmin").select("round_id", "hole_number", "pin_lat", "pin_lon")
+    tee_shots = load_shots().join(garmin_holes, on=["round_id", "hole_number"], how="inner")
+    tee_shots = _filter_rounds(tee_shots, round_ids).filter(
+        (pl.col("shot_number") == 1) & pl.col("club").is_not_null() & pl.col("distance_m").is_not_null()
+    )
+    if club_names:
+        tee_shots = tee_shots.filter(pl.col("club").is_in(club_names))
+    if tee_shots.height == 0:
+        return pl.DataFrame(schema={"club": pl.String, "outcome": pl.String, "n": pl.UInt32})
+    import math as _math
+    rows: list[tuple[str, str]] = []
+    for r in tee_shots.iter_rows(named=True):
+        club = r["club"]
+        if r["lie"] in ("Fairway", "Green"):
+            rows.append((club, "hit"))
+            continue
+        if None in (r["pin_lat"], r["start_lat"], r["start_lon"], r["lat"], r["lon"]):
+            rows.append((club, "miss_other"))
+            continue
+        lat_mid = _math.radians((r["start_lat"] + r["pin_lat"]) / 2)
+        ax = (r["pin_lon"] - r["start_lon"]) * _math.cos(lat_mid)
+        ay = r["pin_lat"] - r["start_lat"]
+        bx = (r["lon"] - r["start_lon"]) * _math.cos(lat_mid)
+        by = r["lat"] - r["start_lat"]
+        cross = ax * by - ay * bx
+        rows.append((club, "miss_left" if cross > 0 else "miss_right"))
+    df = pl.DataFrame(rows, schema={"club": pl.String, "outcome": pl.String}, orient="row")
+    return df.group_by("club", "outcome").agg(pl.len().alias("n"))
+
+
+def driving_by_shot_distance(round_ids: list[int] | None = None, bucket: int = 25, club_names: list[str] | None = None) -> pl.DataFrame:
+    """Driving outcome share per tee-shot distance bucket (Garmin, par 4/5)."""
+    holes = _filter_rounds(enriched_holes(), round_ids).filter(pl.col("par").is_in([4, 5]))
+    if holes.height == 0:
+        return pl.DataFrame(schema={"bucket": pl.Int64, "outcome": pl.String, "n": pl.UInt32})
+    garmin_holes = holes.filter(pl.col("source") == "garmin").select("round_id", "hole_number", "pin_lat", "pin_lon")
+    tee_shots = load_shots().join(garmin_holes, on=["round_id", "hole_number"], how="inner")
+    tee_shots = _filter_rounds(tee_shots, round_ids).filter(
+        (pl.col("shot_number") == 1) & pl.col("distance_m").is_not_null()
+    )
+    if club_names:
+        tee_shots = tee_shots.filter(pl.col("club").is_in(club_names))
+    if tee_shots.height == 0:
+        return pl.DataFrame(schema={"bucket": pl.Int64, "outcome": pl.String, "n": pl.UInt32})
+    tee_shots = tee_shots.with_columns(((pl.col("distance_m") / 0.9144).floordiv(bucket) * bucket).cast(pl.Int64).alias("bucket"))
+    import math as _math
+    rows: list[tuple[int, str]] = []
+    for r in tee_shots.iter_rows(named=True):
+        b = int(r["bucket"])
+        if r["lie"] in ("Fairway", "Green"):
+            rows.append((b, "hit"))
+            continue
+        if None in (r["pin_lat"], r["start_lat"], r["start_lon"], r["lat"], r["lon"]):
+            rows.append((b, "miss_other"))
+            continue
+        lat_mid = _math.radians((r["start_lat"] + r["pin_lat"]) / 2)
+        ax = (r["pin_lon"] - r["start_lon"]) * _math.cos(lat_mid)
+        ay = r["pin_lat"] - r["start_lat"]
+        bx = (r["lon"] - r["start_lon"]) * _math.cos(lat_mid)
+        by = r["lat"] - r["start_lat"]
+        cross = ax * by - ay * bx
+        rows.append((b, "miss_left" if cross > 0 else "miss_right"))
+    df = pl.DataFrame(rows, schema={"bucket": pl.Int64, "outcome": pl.String}, orient="row")
+    return df.group_by("bucket", "outcome").agg(pl.len().alias("n"))
+
+
+def approach_by_club(round_ids: list[int] | None = None, club_names: list[str] | None = None) -> pl.DataFrame:
+    """Per-club approach outcomes (Garmin APPROACH shots, per club)."""
+    holes = load_holes().filter(pl.col("source") == "garmin").select("round_id", "hole_number", "par", "pin_lat", "pin_lon")
+    shots = (
+        load_shots()
+        .filter(pl.col("shot_type") == "APPROACH")
+        .filter(pl.col("club").is_not_null())
+        .join(holes, on=["round_id", "hole_number"], how="inner")
+        .sort("shot_number")
+    )
+    shots = _filter_rounds(shots, round_ids)
+    if club_names:
+        shots = shots.filter(pl.col("club").is_in(club_names))
+    if shots.height == 0:
+        return pl.DataFrame(schema={"club": pl.String, "outcome": pl.String, "n": pl.UInt32})
+    last_shot = shots.group_by("round_id", "hole_number").agg(pl.col("shot_number").max().alias("_hole_last"))
+    shots = shots.join(last_shot, on=["round_id", "hole_number"], how="left")
+    import math as _math2
+    rows: list[tuple[str, str]] = []
+    for r in shots.iter_rows(named=True):
+        club = r["club"]
+        end_lie = r["lie"]
+        holed = False
+        if r["pin_lat"] is not None and r["lat"] is not None and r["lon"] is not None:
+            dy = (r["lat"] - r["pin_lat"]) * 111_320
+            dx = (r["lon"] - r["pin_lon"]) * 111_320 * _math2.cos(_math2.radians(r["lat"]))
+            holed = _math2.hypot(dy, dx) / 0.9144 <= 6
+        is_final = r["_hole_last"] == r["shot_number"]
+        if end_lie == "Green" or (holed and is_final):
+            outcome = "hit_reg" if r["shot_number"] <= r["par"] - 2 else "hit_noreg"
+        elif None in (r["pin_lat"], r["start_lat"], r["start_lon"], r["lat"], r["lon"]):
+            outcome = "miss_other"
+        else:
+            lat_mid = _math2.radians((r["start_lat"] + r["pin_lat"]) / 2)
+            ax = (r["pin_lon"] - r["start_lon"]) * _math2.cos(lat_mid)
+            ay = r["pin_lat"] - r["start_lat"]
+            bx = (r["lon"] - r["start_lon"]) * _math2.cos(lat_mid)
+            by = r["lat"] - r["start_lat"]
+            cross = ax * by - ay * bx
+            outcome = "miss_left" if cross > 0 else "miss_right"
+        rows.append((club, outcome))
+    df = pl.DataFrame(rows, schema={"club": pl.String, "outcome": pl.String}, orient="row")
+    return df.group_by("club", "outcome").agg(pl.len().alias("n"))
+
+
+def approach_by_shot_distance(round_ids: list[int] | None = None, bucket: int = 25, club_names: list[str] | None = None) -> pl.DataFrame:
+    """Approach outcome share per shot-distance bucket (Garmin APPROACH shots)."""
+    holes = load_holes().filter(pl.col("source") == "garmin").select("round_id", "hole_number", "par", "pin_lat", "pin_lon")
+    shots = (
+        load_shots()
+        .filter(pl.col("shot_type") == "APPROACH")
+        .filter(pl.col("distance_m").is_not_null())
+        .join(holes, on=["round_id", "hole_number"], how="inner")
+        .sort("shot_number")
+    )
+    shots = _filter_rounds(shots, round_ids)
+    if club_names:
+        shots = shots.filter(pl.col("club").is_in(club_names))
+    if shots.height == 0:
+        return pl.DataFrame(schema={"bucket": pl.Int64, "outcome": pl.String, "n": pl.UInt32})
+    shots = shots.with_columns(((pl.col("distance_m") / 0.9144).floordiv(bucket) * bucket).cast(pl.Int64).alias("bucket"))
+    last_shot = shots.group_by("round_id", "hole_number").agg(pl.col("shot_number").max().alias("_hole_last"))
+    shots = shots.join(last_shot, on=["round_id", "hole_number"], how="left")
+    import math as _math2
+    rows: list[tuple[int, str]] = []
+    for r in shots.iter_rows(named=True):
+        b = int(r["bucket"])
+        end_lie = r["lie"]
+        holed = False
+        if r["pin_lat"] is not None and r["lat"] is not None and r["lon"] is not None:
+            dy = (r["lat"] - r["pin_lat"]) * 111_320
+            dx = (r["lon"] - r["pin_lon"]) * 111_320 * _math2.cos(_math2.radians(r["lat"]))
+            holed = _math2.hypot(dy, dx) / 0.9144 <= 6
+        is_final = r["_hole_last"] == r["shot_number"]
+        if end_lie == "Green" or (holed and is_final):
+            outcome = "hit_reg" if r["shot_number"] <= r["par"] - 2 else "hit_noreg"
+        elif None in (r["pin_lat"], r["start_lat"], r["start_lon"], r["lat"], r["lon"]):
+            outcome = "miss_other"
+        else:
+            lat_mid = _math2.radians((r["start_lat"] + r["pin_lat"]) / 2)
+            ax = (r["pin_lon"] - r["start_lon"]) * _math2.cos(lat_mid)
+            ay = r["pin_lat"] - r["start_lat"]
+            bx = (r["lon"] - r["start_lon"]) * _math2.cos(lat_mid)
+            by = r["lat"] - r["start_lat"]
+            cross = ax * by - ay * bx
+            outcome = "miss_left" if cross > 0 else "miss_right"
+        rows.append((b, outcome))
+    df = pl.DataFrame(rows, schema={"bucket": pl.Int64, "outcome": pl.String}, orient="row")
+    return df.group_by("bucket", "outcome").agg(pl.len().alias("n"))
+
+
 def available_clubs(round_ids: list[int] | None = None) -> list[str]:
     shots = load_shots().filter(
         pl.col("club").is_not_null()

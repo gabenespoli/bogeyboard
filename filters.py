@@ -1,6 +1,7 @@
 import polars as pl
 import streamlit as st
 
+import settings as user_settings
 import stats
 
 
@@ -53,6 +54,28 @@ def sidebar_filters(summary: pl.DataFrame | None = None) -> tuple[list[int], pl.
 
 def filter_holes(holes: pl.DataFrame, round_ids: list[int]) -> pl.DataFrame:
     return holes if not round_ids else holes.filter(pl.col("round_id").is_in(round_ids))
+
+
+def club_filter_sidebar(round_ids: list[int] | None) -> list[str]:
+    """Render clubs multiselect at bottom of sidebar and return effective club list.
+
+    Uses available_clubs for the current round filter, persists selection in settings.
+    Returns `available` when nothing picked (means All clubs).
+    """
+    available = stats.available_clubs(round_ids)
+    saved = [c for c in user_settings.load_settings().get("clubs_selected", []) if c in available]
+    with st.sidebar:
+        st.divider()
+        st.subheader("Clubs")
+        picked = st.multiselect(
+            "Clubs",
+            options=available,
+            default=saved,
+            key="club_filter",
+            placeholder="All clubs",
+        )
+    user_settings.update_setting("clubs_selected", picked)
+    return picked if picked else available
 
 
 def filter_round_ids(df: pl.DataFrame, round_ids: list[int], col: str = "round_id") -> pl.DataFrame:

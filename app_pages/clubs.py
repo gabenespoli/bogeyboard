@@ -4,7 +4,7 @@ import streamlit as st
 
 import stats
 import settings as user_settings
-from filters import sidebar_filters
+from filters import club_filter_sidebar, sidebar_filters
 
 st.title("Clubs")
 st.caption("Shot data from Garmin tracking, putts excluded. All charts respect the sidebar filters.")
@@ -12,22 +12,7 @@ st.caption("Shot data from Garmin tracking, putts excluded. All charts respect t
 stats.require_data()
 
 round_ids, _ = sidebar_filters()
-
-available = stats.available_clubs(round_ids)
-saved_clubs = [
-    c for c in user_settings.load_settings().get("clubs_selected", [])
-    if c in available
-]
-picked = st.multiselect(
-    "Clubs",
-    options=available,
-    default=saved_clubs,
-    key="club_filter",
-    placeholder="All clubs",
-)
-user_settings.update_setting("clubs_selected", picked)
-
-effective = picked if picked else available
+effective = club_filter_sidebar(round_ids)
 
 c_low, c_high, c_bool = st.columns(3)
 trim_opts = ["Off", 2, 1, 0.5, 0.25]
