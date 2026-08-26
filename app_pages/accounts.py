@@ -92,7 +92,7 @@ for key, finished in [
 with st.container(border=True):
     top = st.columns([1, 3])
     can_sync = not busy and any(_has_creds(s) for s in sync_manager.SERVICES)
-    if top[0].button("Sync all", type="primary", disabled=not can_sync, use_container_width=True):
+    if top[0].button("Sync all", type="primary", disabled=not can_sync, width="stretch"):
         _launch(list(sync_manager.SERVICES))
     if update_running:
         top[1].info("Installing an app update — syncing is paused until it finishes.")
@@ -142,12 +142,12 @@ for service, (label, blurb, _) in SERVICE_META.items():
         if cols[0].button(
             "Sync now",
             disabled=busy or not _has_creds(service),
-            use_container_width=True,
+            width="stretch",
             key=f"sync_{service}",
         ):
             _launch([service])
         with cols[1].popover(
-            "Full re-sync", disabled=busy or not _has_creds(service), use_container_width=True
+            "Full re-sync", disabled=busy or not _has_creds(service), width="stretch"
         ):
             st.write(
                 f"Deletes the stored {label} rounds and downloads all of them again from scratch. "
@@ -194,7 +194,7 @@ with st.container(border=True):
         if cols[0].button(
             "Check for updates",
             disabled=busy,
-            use_container_width=True,
+            width="stretch",
             key="check_update",
         ):
             updater.status(refresh=True)
@@ -202,7 +202,7 @@ with st.container(border=True):
         if cols[1].button(
             "Update now",
             disabled=busy or not behind,
-            use_container_width=True,
+            width="stretch",
             key="run_update",
         ):
             err = updater.start_update()

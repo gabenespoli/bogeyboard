@@ -234,8 +234,167 @@ def enriched_holes() -> pl.DataFrame:
     ).drop("fir_grint", "fir_hole19", "gir_grint", "fir_garmin", "gir_garmin")
 
 
+def _trunc1(x: float) -> float:
+    """WHS truncation to 1 decimal: 10.487 -> 10.4 (not round)."""
+    return math.trunc(x * 10) / 10
+
+
+def _whs_k_adj(n: int) -> tuple[int, float]:
+    """WHS 2024 lookup: returns (k_lowest_used, adjustment). n = eligible 18-hole equivalents."""
+    if n < 3:
+        return (0, 0.0)
+    if n == 3 or n == 4:
+        return (1, 0.0)
+    if n == 5 or n == 6:
+        return (1, -1.0)
+    if n == 7 or n == 8:
+        return (2, 0.0)
+    if 9 <= n <= 11:
+        return (3, 0.0)
+    if 12 <= n <= 14:
+        return (4, 0.0)
+    if 15 <= n <= 16:
+        return (5, 0.0)
+    if 17 <= n <= 18:
+        return (6, 0.0)
+    if n == 19:
+        return (7, 0.0)
+    return (8, 0.0)  # n >= 20
+
+
+def _normalize_9hole(holes_played: int, rating: float | None, slope: float | None) -> tuple[float | None, float | None, float | None, float | None]:
+    """
+    Returns (rating9, slope9, rating18, slope18) normalized to 9 and 18 hole values.
+    Garmin stores 18-hole rating/slope even for 9-hole rounds (rating ~60-75).
+    Grint stores 9-hole rating/slope for 9-hole rounds (rating ~25-35).
+    """
+    if holes_played == 18 or (holes_played == 9 and rating is not None and rating > 50):
+        # 18-hole round, or Garmin 9-hole with 18-hole rating stored
+        if rating is None or slope is None:
+            return (None, None, None, None)
+        rating9 = rating / 2.0
+        slope9 = slope
+        rating18 = rating
+        slope18 = slope
+        return (rating9, slope9, rating18, slope18)
+    if holes_played == 9 and rating is not None and rating <= 50:
+        # Grint 9-hole with 9-hole rating stored
+        if slope is None:
+            return (None, None, None, None)
+        rating9 = rating
+        slope9 = slope
+        rating18 = rating * 2.0
+        slope18 = slope
+        return (rating9, slope9, rating18, slope18)
+    # 7-hole or other edge cases
+    return (None, None, None, None)
+
+
+def _compute_scaled_differentials(rounds_df: pl.DataFrame) -> pl.DataFrame:
+    """
+    Compute WHS scaled 18-hole differentials chronologically.
+    Input: load_rounds() sorted by date asc, round_id asc.
+    Output: same rows with new columns:
+      differential, differential_9_raw, expected_9, hi_before, hi_after, is_scaled_9,
+      rating9, slope9, rating18, slope18
+    """
+    if rounds_df.height == 0:
+        return rounds_df.with_columns([
+            pl.lit(None, dtype=pl.Float64).alias("differential"),
+            pl.lit(None, dtype=pl.Float64).alias("differential_9_raw"),
+            pl.lit(None, dtype=pl.Float64).alias("expected_9"),
+            pl.lit(None, dtype=pl.Float64).alias("hi_before"),
+            pl.lit(None, dtype=pl.Float64).alias("hi_after"),
+            pl.lit(False, dtype=pl.Boolean).alias("is_scaled_9"),
+            pl.lit(None, dtype=pl.Float64).alias("rating9"),
+            pl.lit(None, dtype=pl.Float64).alias("slope9"),
+            pl.lit(None, dtype=pl.Float64).alias("rating18"),
+            pl.lit(None, dtype=pl.Float64).alias("slope18"),
+        ])
+
+    # Work with list of dicts for iterative computation
+    rows = rounds_df.sort(["date", "round_id"]).to_dicts()
+    scaled_diffs: list[float] = []  # all scaled 18-hole diffs seen so far
+    results = []
+
+    for r in rows:
+        score = r.get("score")
+        holes = r.get("holes_played", 18)
+        rating = r.get("rating")
+        slope = r.get("slope")
+
+        rating9, slope9, rating18, slope18 = _normalize_9hole(holes, rating, slope)
+
+        diff18 = None
+        diff9_raw = None
+        expected_9 = None
+        is_scaled = False
+        hi_before = None
+        scaled = None
+        hi_after = None
+
+        if rating9 is None or slope9 is None or rating18 is None or slope18 is None or score is None:
+            # Missing data -> no differential
+            pass
+        else:
+            # HI before this round from prior 20 scaled diffs
+            eligible = [d for d in scaled_diffs[-20:] if d is not None]
+            k, adj = _whs_k_adj(len(eligible))
+            if k > 0:
+                best = sorted(eligible)[:k]
+                hi_before = _trunc1(sum(best) / len(best) + adj)
+
+            if holes == 18:
+                diff18 = round((score - rating18) * 113.0 / slope18, 1)
+                scaled = diff18
+            else:
+                # 9-hole (or 7-hole treated as 9 for scaling)
+                diff9_raw = round((score - rating9) * 113.0 / slope9, 1)
+                if hi_before is not None:
+                    expected_9 = round(hi_before / 2.0, 1)
+                    scaled = round(diff9_raw + expected_9, 1)
+                    is_scaled = True
+                else:
+                    # Fallback: simple doubling without HI
+                    scaled = round((score * 2.0 - rating18) * 113.0 / slope18, 1)
+                    # expected_9 stays None to flag fallback
+
+            if scaled is not None:
+                scaled_diffs.append(scaled)
+
+                # HI after this round — best of last 20 including current
+                eligible_after = [d for d in scaled_diffs[-20:] if d is not None]
+                k, adj = _whs_k_adj(len(eligible_after))
+                if k > 0:
+                    best = sorted(eligible_after)[:k]
+                    hi_after = _trunc1(sum(best) / len(best) + adj)
+                else:
+                    hi_after = None
+
+        results.append({
+            "round_id": r["round_id"],
+            "differential": scaled,
+            "differential_9_raw": diff9_raw,
+            "expected_9": expected_9,
+            "hi_before": hi_before,
+            "hi_after": hi_after,
+            "is_scaled_9": is_scaled,
+            "rating9": rating9,
+            "slope9": slope9,
+            "rating18": rating18,
+            "slope18": slope18,
+        })
+
+    # Convert to DataFrame and join back (drop existing WHS columns first)
+    diff_df = pl.DataFrame(results)
+    whs_cols = ["differential", "differential_9_raw", "expected_9", "hi_before", "hi_after", "is_scaled_9", "rating9", "slope9", "rating18", "slope18"]
+    rounds_df = rounds_df.drop([c for c in whs_cols if c in rounds_df.columns])
+    return rounds_df.join(diff_df, on="round_id", how="left")
+
+
+@st.cache_data(ttl=600)
 def round_summary() -> pl.DataFrame:
-    """One row per round with differential, FIR/GIR/scrambling %, putts."""
+    """One row per round with WHS differential, FIR/GIR/scrambling %, putts."""
     holes = enriched_holes()
     agg = holes.group_by("round_id").agg(
         pl.col("fir").mean().mul(100).round(1).alias("fir_pct"),
@@ -247,16 +406,10 @@ def round_summary() -> pl.DataFrame:
         (pl.col("gir") == False).sum().alias("_missed_greens"),
     )
     df = load_rounds().join(agg, on="round_id", how="left")
-    df = df.with_columns(
-        pl.when(
-            pl.col("rating").is_not_null()
-            & pl.col("slope").is_not_null()
-            & (pl.col("holes_played") == 18)
-        )
-        .then(((pl.col("score") - pl.col("rating")) * 113 / pl.col("slope")).round(1))
-        .otherwise(None)
-        .alias("differential")
-    )
+
+    # Compute WHS scaled differentials chronologically
+    df = _compute_scaled_differentials(df)
+
     df = df.with_columns(
         pl.when(pl.col("_missed_greens") > 0)
         .then(pl.col("_saves") / pl.col("_missed_greens") * 100)
@@ -274,29 +427,50 @@ def round_summary() -> pl.DataFrame:
 
 
 def _handicap_flagged(rounds: pl.DataFrame) -> pl.DataFrame:
+    """Flag which of the last 20 eligible rounds count toward handicap (k lowest of last 20)."""
     eligible = (
         rounds.filter(pl.col("differential").is_not_null())
         .sort("date", descending=True)
         .head(20)
     )
-    if eligible.height == 0:
-        return rounds.with_columns(pl.lit(None).alias("counts"))
-    best = eligible.sort("differential").head(8)
+    n = eligible.height
+    k, _ = _whs_k_adj(n)
+    if k == 0:
+        return rounds.with_columns(pl.lit(False).alias("counts"))
+    best = eligible.sort("differential").head(k)
     return rounds.with_columns(
         pl.col("round_id").is_in(best["round_id"]).alias("counts")
     )
 
 
 def handicap_index(summary: pl.DataFrame) -> float | None:
+    """Current WHS Handicap Index from last 20 eligible rounds."""
     eligible = (
         summary.filter(pl.col("differential").is_not_null())
         .sort("date", descending=True)
         .head(20)
     )
-    if eligible.height < 3:
+    n = eligible.height
+    k, adj = _whs_k_adj(n)
+    if k == 0:
         return None
-    best = eligible.sort("differential").head(min(8, eligible.height))
-    return round(best["differential"].mean(), 1)
+    best = eligible.sort("differential").head(k)
+    return _trunc1(best["differential"].mean() + adj)
+
+
+def handicap_history() -> pl.DataFrame:
+    """Chronological history of HI progression for visualization.
+    Returns: date, round_id, course_name, holes_played, score, rating, slope,
+             differential, differential_9_raw, expected_9, is_scaled_9,
+             hi_before, hi_after, counts
+    """
+    full = round_summary()
+    cols = [
+        "date", "round_id", "course_name", "holes_played", "score",
+        "rating", "slope", "differential", "differential_9_raw",
+        "expected_9", "is_scaled_9", "hi_before", "hi_after", "counts"
+    ]
+    return full.select(cols).sort("date")
 
 
 def putt_distribution(holes: pl.DataFrame | None = None) -> pl.DataFrame:

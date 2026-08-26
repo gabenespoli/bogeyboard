@@ -45,6 +45,16 @@ ROUNDS_SCHEMA = {
     "slope": pl.Float64,
     "rating": pl.Float64,
     "walk_distance_m": pl.Float64,
+    "differential": pl.Float64,
+    "differential_9_raw": pl.Float64,
+    "expected_9": pl.Float64,
+    "hi_before": pl.Float64,
+    "hi_after": pl.Float64,
+    "is_scaled_9": pl.Boolean,
+    "rating9": pl.Float64,
+    "slope9": pl.Float64,
+    "rating18": pl.Float64,
+    "slope18": pl.Float64,
 }
 
 HOLES_SCHEMA = {
