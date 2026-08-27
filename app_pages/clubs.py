@@ -47,10 +47,23 @@ user_settings.update_setting("apply_std_filter", apply_std_filter)
 user_settings.update_setting("trim_std", trim_std)
 user_settings.update_setting("trim_std_high", trim_std_high)
 
+SHOT_TYPE_OPTIONS = ["TEE", "APPROACH", "CHIP", "LAYUP", "RECOVERY", "UNKNOWN", "PUTT"]
+DEFAULT_SHOT_TYPES = ["TEE", "APPROACH", "UNKNOWN"]
+saved_st = [s for s in user_settings.load_settings().get("clubs_shot_types", DEFAULT_SHOT_TYPES) if s in SHOT_TYPE_OPTIONS]
+picked_st = st.multiselect(
+    "Shot types",
+    options=SHOT_TYPE_OPTIONS,
+    default=saved_st if saved_st else DEFAULT_SHOT_TYPES,
+    key="clubs_shot_types_mselect",
+    help="Filter which shot types count toward club distances. PUTT excluded by default.",
+)
+user_settings.update_setting("clubs_shot_types", picked_st)
+effective_st = picked_st if picked_st else DEFAULT_SHOT_TYPES
+
 eff_low = trim_std if apply_std_filter else "Off"
 eff_high = trim_std_high if apply_std_filter else "Off"
 
-shots = stats.shot_distances(effective, round_ids, trim_std=eff_low, trim_std_high=eff_high)
+shots = stats.shot_distances(effective, round_ids, trim_std=eff_low, trim_std_high=eff_high, shot_types=effective_st)
 
 st.subheader("Distance distribution")
 if shots.height == 0:
@@ -64,7 +77,7 @@ else:
     if parts:
         st.caption(f"Outlier trimming active — keeping shots within {' and '.join(parts)} the club average ({shots.height} shots).")
     curves, means = stats.shot_density(
-        effective, round_ids, trim_std=eff_low, trim_std_high=eff_high
+        effective, round_ids, trim_std=eff_low, trim_std_high=eff_high, shot_types=effective_st
     )
 
     areas = (
@@ -108,6 +121,7 @@ clubs = stats.club_distances(
     club_names=effective,
     trim_std=eff_low,
     trim_std_high=eff_high,
+    shot_types=effective_st,
 )
 if clubs.height == 0:
     st.caption("No club-tagged shots yet — rerun the Garmin fetch after playing with CT10 sensors paired.")

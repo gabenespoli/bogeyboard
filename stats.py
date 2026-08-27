@@ -520,11 +520,16 @@ def shot_distances(
     round_ids: list[int] | None = None,
     trim_std: float | str | None = None,
     trim_std_high: float | str | None = None,
+    shot_types: list[str] | None = None,
 ) -> pl.DataFrame:
+    if shot_types is not None:
+        type_filter = pl.col("shot_type").is_in(shot_types)
+    else:
+        type_filter = pl.col("shot_type") != "PUTT"
     shots = load_shots().filter(
         pl.col("club").is_not_null()
         & pl.col("distance_m").is_not_null()
-        & (pl.col("shot_type") != "PUTT")
+        & type_filter
         & pl.col("club").is_in(club_names)
     )
     if round_ids is not None:
@@ -571,10 +576,11 @@ def shot_density(
     round_ids: list[int] | None = None,
     trim_std: float | str | None = None,
     trim_std_high: float | str | None = None,
+    shot_types: list[str] | None = None,
     points: int = 120,
 ) -> tuple[pl.DataFrame, pl.DataFrame]:
     """Gaussian KDE curves per club plus per-club means, ready for plotting."""
-    shots = shot_distances(club_names, round_ids, trim_std=trim_std, trim_std_high=trim_std_high)
+    shots = shot_distances(club_names, round_ids, trim_std=trim_std, trim_std_high=trim_std_high, shot_types=shot_types)
     means = shots.group_by("club").agg(
         pl.col("distance_yds").mean().round(1).alias("mean_yds")
     )
@@ -1043,12 +1049,14 @@ def club_distances(
     club_names: list[str] | None = None,
     trim_std: float | str | None = None,
     trim_std_high: float | str | None = None,
+    shot_types: list[str] | None = None,
 ) -> pl.DataFrame:
     shots = shot_distances(
         club_names if club_names is not None else available_clubs(round_ids),
         round_ids,
         trim_std=trim_std,
         trim_std_high=trim_std_high,
+        shot_types=shot_types,
     )
     return (
         shots.group_by("club")
