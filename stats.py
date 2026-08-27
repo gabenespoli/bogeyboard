@@ -122,6 +122,16 @@ def load_shots() -> pl.DataFrame:
     return pl.read_parquet(path)
 
 
+@st.cache_data(ttl=600)
+def load_garmin_club_stats() -> pl.DataFrame:
+    path = DATA_DIR / "garmin_club_stats.parquet"
+    if not path.exists():
+        from fetch_garmin import CLUB_STATS_SCHEMA
+
+        return pl.DataFrame(schema=CLUB_STATS_SCHEMA)
+    return pl.read_parquet(path)
+
+
 def require_data() -> None:
     """First-run gate: show a setup prompt instead of crashing on missing data files."""
     missing = [n for n in ("rounds.parquet", "holes.parquet") if not (DATA_DIR / n).exists()]
@@ -521,6 +531,7 @@ def shot_distances(
     trim_std: float | str | None = None,
     trim_std_high: float | str | None = None,
     shot_types: list[str] | None = None,
+    trim_type: str = "std",
 ) -> pl.DataFrame:
     if shot_types is not None:
         type_filter = pl.col("shot_type").is_in(shot_types)
@@ -543,31 +554,73 @@ def shot_distances(
         "club",
         (pl.col("distance_m") / 0.9144).alias("distance_yds"),
     )
-    trims = {
-        "low": trim_std if isinstance(trim_std, (int, float)) and trim_std else None,
-        "high": trim_std_high
-        if isinstance(trim_std_high, (int, float)) and trim_std_high
-        else None,
-    }
-    if (trims["low"] is not None or trims["high"] is not None) and shots.height:
-        shots = (
-            shots.with_columns(
-                pl.col("distance_yds").mean().over("club").alias("_mean"),
-                pl.col("distance_yds").std().over("club").alias("_std"),
+    if trim_type == "pct":
+        # pct trimming: keep top X% (trim low) and/or bottom Y% (trim high) per club
+        def _parse_pct(v: float | str | None) -> float | None:
+            if v is None or v == "Off" or v == "off":
+                return None
+            if isinstance(v, (int, float)):
+                return float(v) / 100 if v > 1 else float(v)
+            s = str(v).strip().replace("%", "")
+            try:
+                f = float(s)
+                return f / 100 if f > 1 else f
+            except Exception:
+                return None
+
+        low_pct = _parse_pct(trim_std)
+        high_pct = _parse_pct(trim_std_high)
+        if (low_pct is not None or high_pct is not None) and shots.height:
+            # per-club pct trimming via python loop (keeps logic simple and matches Garmin top% calc)
+            parts = []
+            for club_key, g in shots.group_by("club"):
+                vsorted = g.sort("distance_yds", descending=True)
+                n = vsorted.height
+                start = 0
+                end = n
+                if high_pct is not None:
+                    # trim high = drop top high_pct (e.g., 25% -> drop longest 25%)
+                    drop_high = int(n * high_pct + 0.5)
+                    end = n - drop_high
+                if low_pct is not None:
+                    # trim low = keep top low_pct (e.g., 50% -> keep longest 50%, drop bottom 50%)
+                    keep = int(n * low_pct + 0.5)
+                    # if high already trimmed, adjust: keep top low% of original, but within [start,end)
+                    # For Garmin exact (low 50% only): keep top 50%
+                    # For combined, keep top low% within remaining after high trim
+                    # Simplify: keep top low% of original, intersect with [start,end)
+                    keep_top = int(n * low_pct + 0.5)
+                    end = min(end, keep_top)
+                    start = 0
+                if start < end:
+                    parts.append(vsorted.slice(start, end - start))
+            shots = pl.concat(parts) if parts else shots.clear()
+    else:
+        trims = {
+            "low": trim_std if isinstance(trim_std, (int, float)) and trim_std else None,
+            "high": trim_std_high
+            if isinstance(trim_std_high, (int, float)) and trim_std_high
+            else None,
+        }
+        if (trims["low"] is not None or trims["high"] is not None) and shots.height:
+            shots = (
+                shots.with_columns(
+                    pl.col("distance_yds").mean().over("club").alias("_mean"),
+                    pl.col("distance_yds").std().over("club").alias("_std"),
+                )
+                .with_columns(
+                    (pl.col("distance_yds") - pl.col("_mean")).alias("_dev")
+                )
+                .filter(
+                    (trims["low"] is None)
+                    | (-pl.col("_dev") <= trims["low"] * pl.col("_std"))
+                )
+                .filter(
+                    (trims["high"] is None)
+                    | (pl.col("_dev") <= trims["high"] * pl.col("_std"))
+                )
+                .drop("_mean", "_std", "_dev")
             )
-            .with_columns(
-                (pl.col("distance_yds") - pl.col("_mean")).alias("_dev")
-            )
-            .filter(
-                (trims["low"] is None)
-                | (-pl.col("_dev") <= trims["low"] * pl.col("_std"))
-            )
-            .filter(
-                (trims["high"] is None)
-                | (pl.col("_dev") <= trims["high"] * pl.col("_std"))
-            )
-            .drop("_mean", "_std", "_dev")
-        )
     return shots
 
 
@@ -577,10 +630,11 @@ def shot_density(
     trim_std: float | str | None = None,
     trim_std_high: float | str | None = None,
     shot_types: list[str] | None = None,
+    trim_type: str = "std",
     points: int = 120,
 ) -> tuple[pl.DataFrame, pl.DataFrame]:
     """Gaussian KDE curves per club plus per-club means, ready for plotting."""
-    shots = shot_distances(club_names, round_ids, trim_std=trim_std, trim_std_high=trim_std_high, shot_types=shot_types)
+    shots = shot_distances(club_names, round_ids, trim_std=trim_std, trim_std_high=trim_std_high, shot_types=shot_types, trim_type=trim_type)
     means = shots.group_by("club").agg(
         pl.col("distance_yds").mean().round(1).alias("mean_yds")
     )
@@ -1050,13 +1104,73 @@ def club_distances(
     trim_std: float | str | None = None,
     trim_std_high: float | str | None = None,
     shot_types: list[str] | None = None,
+    method: str = "mean",
+    trim_type: str = "std",
 ) -> pl.DataFrame:
+    if method == "garmin":
+        # Replicated Garmin: TEE+APPROACH only, top 50% longest per club (RMSE 2.6m vs official)
+        base = load_shots().filter(
+            pl.col("club").is_not_null()
+            & pl.col("distance_m").is_not_null()
+            & pl.col("club").is_in(club_names if club_names is not None else available_clubs(round_ids))
+            & pl.col("shot_type").is_in(["TEE", "APPROACH"])
+        )
+        if round_ids is not None:
+            base = base.filter(pl.col("round_id").is_in(round_ids)) if round_ids else base.clear()
+        if base.height == 0:
+            return pl.DataFrame(schema={"club": pl.String, "avg_yds": pl.Float64, "shots": pl.UInt32})
+        data = {"club": [], "avg_yds": [], "shots": []}
+        for club, g in base.group_by("club"):
+            club_name = club[0] if isinstance(club, (tuple, list)) else club
+            v = g["distance_m"] / 0.9144
+            n = v.len()
+            k = max(1, int(n * 0.5))
+            top = v.sort(descending=True).head(k)
+            data["club"].append(club_name)
+            data["avg_yds"].append(round(top.mean(), 1) if top.len() else None)
+            data["shots"].append(k)
+        return pl.DataFrame(data, schema={"club": pl.String, "avg_yds": pl.Float64, "shots": pl.UInt32}).sort("avg_yds", descending=True)
+    if method == "peak25":
+        base = load_shots().filter(
+            pl.col("club").is_not_null()
+            & pl.col("distance_m").is_not_null()
+            & pl.col("club").is_in(club_names if club_names is not None else available_clubs(round_ids))
+            & (pl.col("shot_type").is_in(shot_types) if shot_types is not None else pl.col("shot_type") != "PUTT")
+        )
+        if round_ids is not None:
+            base = base.filter(pl.col("round_id").is_in(round_ids)) if round_ids else base.clear()
+        if base.height == 0:
+            return pl.DataFrame(schema={"club": pl.String, "avg_yds": pl.Float64, "shots": pl.UInt32})
+        data = {"club": [], "avg_yds": [], "shots": []}
+        for club, g in base.group_by("club"):
+            club_name = club[0] if isinstance(club, (tuple, list)) else club
+            v = g["distance_m"] / 0.9144
+            n = v.len()
+            k = max(1, int((n * 0.25 + 0.5)))  # ceil 25%
+            top = v.sort(descending=True).head(k)
+            data["club"].append(club_name)
+            data["avg_yds"].append(round(top.mean(), 1) if top.len() else None)
+            data["shots"].append(k)
+        return pl.DataFrame(data, schema={"club": pl.String, "avg_yds": pl.Float64, "shots": pl.UInt32}).sort("avg_yds", descending=True)
+    if method == "median":
+        base = load_shots().filter(
+            pl.col("club").is_not_null()
+            & pl.col("distance_m").is_not_null()
+            & pl.col("club").is_in(club_names if club_names is not None else available_clubs(round_ids))
+            & (pl.col("shot_type").is_in(shot_types) if shot_types is not None else pl.col("shot_type") != "PUTT")
+        )
+        if round_ids is not None:
+            base = base.filter(pl.col("round_id").is_in(round_ids)) if round_ids else base.clear()
+        if base.height == 0:
+            return pl.DataFrame(schema={"club": pl.String, "avg_yds": pl.Float64, "shots": pl.UInt32})
+        return base.group_by("club").agg((pl.col("distance_m") / 0.9144).median().round(1).alias("avg_yds"), pl.len().alias("shots")).sort("avg_yds", descending=True)
     shots = shot_distances(
         club_names if club_names is not None else available_clubs(round_ids),
         round_ids,
         trim_std=trim_std,
         trim_std_high=trim_std_high,
         shot_types=shot_types,
+        trim_type=trim_type,
     )
     return (
         shots.group_by("club")

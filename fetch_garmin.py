@@ -87,6 +87,15 @@ SHOTS_SCHEMA = {
     "distance_m": pl.Float64,
 }
 
+CLUB_STATS_SCHEMA = {
+    "club": pl.String,
+    "averageDistance_m": pl.Float64,
+    "averageDistance_yds": pl.Float64,
+    "maxDistance_m": pl.Float64,
+    "minDistance_m": pl.Float64,
+    "shotsCount": pl.Int64,
+}
+
 
 def _prompt_mfa() -> str:
     code = os.environ.get("GARMIN_MFA_CODE", "").strip()
@@ -302,6 +311,43 @@ def parse_shots(shot_data: dict, round_id: int) -> list[dict]:
     return rows
 
 
+def fetch_club_stats(client: Garmin) -> None:
+    """Fetch Garmin's official club averages and store to parquet for replication."""
+    try:
+        data = client.get_golf_club_stats()
+        # data is list of club dicts
+        clubs = data if isinstance(data, list) else data.get("clubStats", []) if isinstance(data, dict) else []
+        rows = []
+        for c in clubs:
+            name = c.get("name")
+            cs = c.get("clubStats") or {}
+            if not name or not cs:
+                continue
+            avg_m = cs.get("averageDistance")
+            if avg_m is None:
+                continue
+            rows.append(
+                {
+                    "club": str(name),
+                    "averageDistance_m": float(avg_m) if avg_m is not None else None,
+                    "averageDistance_yds": float(avg_m) / 0.9144 if avg_m is not None else None,
+                    "maxDistance_m": float(cs.get("maximumRecentDistance")) if cs.get("maximumRecentDistance") is not None else None,
+                    "minDistance_m": float(cs.get("minimumRecentDistance")) if cs.get("minimumRecentDistance") is not None else None,
+                    "shotsCount": int(cs.get("shotsCount")) if cs.get("shotsCount") is not None else None,
+                }
+            )
+        if rows:
+            df = pl.DataFrame(rows, schema=CLUB_STATS_SCHEMA)
+            df.sort("averageDistance_yds", descending=True).write_parquet(DATA_DIR / "garmin_club_stats.parquet")
+            # also save raw for inspection
+            (DATA_DIR / "raw" / "garmin_club_stats.json").write_text(json.dumps(data, indent=2, default=str))
+            print(f"  club stats: {df.height} clubs -> data/garmin_club_stats.parquet")
+        else:
+            print("  club stats: no data")
+    except Exception as e:
+        print(f"  club stats failed: {e.__class__.__name__}: {e}")
+
+
 def fetch_all(full: bool, since: str | None) -> None:
     client = get_client()
     DATA_DIR.mkdir(exist_ok=True)
@@ -311,8 +357,15 @@ def fetch_all(full: bool, since: str | None) -> None:
     rounds_path = DATA_DIR / "rounds.parquet"
     existing_ids: set[int] = set()
     if rounds_path.exists() and not full:
-        stored_rounds = pl.read_parquet(rounds_path)
-        existing_ids = set(stored_rounds["round_id"].to_list())
+        _loaded = pl.read_parquet(rounds_path)
+        # Clean up legacy duplicate *_right columns from earlier backfill bug
+        _loaded = _loaded.select([c for c in _loaded.columns if not c.endswith("_right")])
+        # Ensure schema matches ROUNDS_SCHEMA (add missing cols as null, drop extras)
+        for col, dtype in ROUNDS_SCHEMA.items():
+            if col not in _loaded.columns:
+                _loaded = _loaded.with_columns(pl.lit(None, dtype=dtype).alias(col))
+        stored_rounds = _loaded.select(list(ROUNDS_SCHEMA.keys()))
+        existing_ids = set(stored_rounds["round_id"].to_list()) if stored_rounds.height else set()
         print(f"Loaded {stored_rounds.height} existing rounds")
 
     print("Fetching round summaries...")
@@ -389,6 +442,9 @@ def fetch_all(full: bool, since: str | None) -> None:
     shots_df.sort(["round_id", "hole_number", "shot_number"]).write_parquet(
         DATA_DIR / "shots.parquet"
     )
+
+    # Fetch official Garmin club averages for replication option
+    fetch_club_stats(client)
 
     print("\nDone:")
     print(f"  rounds: {all_rounds.height} -> data/rounds.parquet")
